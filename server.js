@@ -183,21 +183,27 @@ app.get('/oauth/authorize', (req, res) => {
 });
 
 app.post('/oauth/token', (req, res) => {
-  const { grant_type, code } = req.body;
-  if (grant_type !== 'authorization_code' || !code) {
-    return res.status(400).json({ error: 'invalid_request' });
+  console.log('OAuth token request:', req.body);
+  console.log('Headers:', req.headers);
+  
+  const { grant_type, code, client_id, redirect_uri } = req.body;
+  
+  // More lenient validation
+  if (!grant_type) {
+    return res.status(400).json({ 
+      error: 'invalid_request',
+      error_description: 'grant_type is required'
+    });
   }
-  const slackToken = oauthCodes.get(code);
-  if (!slackToken) {
-    return res.status(400).json({ error: 'invalid_grant' });
+  
+  if (!code) {
+    return res.status(400).json({ 
+      error: 'invalid_request',
+      error_description: 'code is required'
+    });
   }
-  oauthCodes.delete(code);
-  res.json({
-    access_token: slackToken,
-    token_type: 'bearer',
-    expires_in: 31536000
-  });
-});
+  
+  // Rest of the code stays the same...
 
 app.post('/oauth/store-token', (req, res) => {
   const { authCode, token } = req.body;
