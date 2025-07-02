@@ -1,22 +1,18 @@
 {
-  "name": "slack-mcp-server-azure",
+  "name": "slack-mcp-server",
   "version": "1.0.0",
-  "description": "Slack MCP Server for Azure Static Web Apps",
+  "description": "Slack MCP Server for Azure Container Apps",
   "type": "module",
+  "main": "server.js",
   "scripts": {
-    "build": "echo 'Build complete'",
-    "start": "echo 'Ready to deploy'"
+    "start": "node server.js",
+    "dev": "node server.js"
   },
-  "dependencies": {},
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5"
+  },
   "engines": {
     "node": ">=18.0.0"
-  },
-  "keywords": [
-    "mcp",
-    "slack",
-    "claude",
-    "azure"
-  ],
-  "author": "Your Name",
-  "license": "MIT"
+  }
 }
