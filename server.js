@@ -93,7 +93,25 @@ app.get('/', (req, res) => {
     version: "1.0.0",
     description: "Connect your Slack workspace to Claude",
     capabilities: { tools: true },
-    status: "running"
+    status: "running",
+    protocol: "mcp",
+    transport: "http"
+  });
+});
+
+// MCP capabilities endpoint for Claude Web
+app.get('/capabilities', (req, res) => {
+  res.json({
+    capabilities: {
+      tools: {
+        listChanged: true
+      }
+    },
+    serverInfo: {
+      name: "slack-mcp-server",
+      version: "1.0.0",
+      description: "Slack MCP Server with 3 tools available"
+    }
   });
 });
 
