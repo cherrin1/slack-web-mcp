@@ -214,13 +214,30 @@ document.getElementById('form').addEventListener('submit', async function(e) {
 });
 
 function completeClaudeOAuth() {
+  console.log('Completing OAuth flow...');
+  console.log('Redirect URI:', redirectUri);
+  console.log('Auth Code:', authCode);
+  console.log('State:', state);
+  
   if (redirectUri && authCode) {
-    const returnUrl = redirectUri + '?code=' + authCode + (state ? '&state=' + state : '');
+    const returnUrl = redirectUri + '?code=' + authCode + (state ? '&state=' + encodeURIComponent(state) : '');
     console.log('Redirecting to:', returnUrl);
-    window.location.href = returnUrl;
+    
+    // Try different redirect methods
+    try {
+      window.location.replace(returnUrl);
+    } catch (e) {
+      console.log('replace failed, trying assign');
+      try {
+        window.location.assign(returnUrl);
+      } catch (e2) {
+        console.log('assign failed, trying href');
+        window.location.href = returnUrl;
+      }
+    }
   } else {
-    console.log('Missing redirect info, closing window');
-    window.close();
+    console.log('Missing redirect info - redirectUri:', redirectUri, 'authCode:', authCode);
+    alert('OAuth flow completed but missing redirect information. Please return to Claude manually.');
   }
 }
 </script></body></html>`;
@@ -365,11 +382,45 @@ app.get('/authorize', (req, res) => {
 });
 
 app.post('/token', (req, res) => {
-  console.log('Direct /token called (redirecting to /oauth/token)');
-  return app._router.handle(req, res, () => {
-    req.url = '/oauth/token';
-    app._router.handle(req, res);
-  });
+  console.log('Direct /token called - handling directly');
+  
+  const { grant_type, code, client_id, redirect_uri, code_verifier } = req.body;
+  
+  if (grant_type !== 'authorization_code') {
+    return res.status(400).json({ 
+      error: 'unsupported_grant_type',
+      error_description: 'Only authorization_code is supported'
+    });
+  }
+  
+  if (!code) {
+    return res.status(400).json({ 
+      error: 'invalid_request',
+      error_description: 'authorization_code is required'
+    });
+  }
+  
+  const slackToken = oauthCodes.get(code);
+  if (!slackToken) {
+    console.log('Authorization code not found or expired:', code);
+    return res.status(400).json({ 
+      error: 'invalid_grant',
+      error_description: 'Invalid or expired authorization code'
+    });
+  }
+  
+  oauthCodes.delete(code);
+  
+  const tokenResponse = {
+    access_token: slackToken,
+    token_type: 'bearer',
+    expires_in: 31536000,
+    refresh_token: `refresh_${Date.now()}_${Math.random().toString(36)}`,
+    scope: 'slack:read slack:write'
+  };
+  
+  console.log('Token issued successfully for:', slackToken.substring(0, 15) + '...');
+  res.json(tokenResponse);
 });
 
 // MCP Protocol - WITH PROPER AUTHENTICATION
@@ -377,6 +428,7 @@ app.post('/', async (req, res) => {
   console.log('=== MCP REQUEST ===');
   console.log('Method:', req.body?.method);
   console.log('Headers Authorization:', req.headers.authorization ? 'Present' : 'Missing');
+  console.log('Full request body:', JSON.stringify(req.body, null, 2));
   
   const { method, params, id } = req.body || {};
 
@@ -401,32 +453,43 @@ app.post('/', async (req, res) => {
         },
         id: id
       };
-      console.log('Initialize response sent');
+      console.log('Initialize response sent - Claude should call tools/list next');
       return res.json(initResponse);
     }
 
     // Handle notifications without auth
     if (method === 'notifications/initialized') {
-      console.log('Handling notifications/initialized');
+      console.log('Handling notifications/initialized - server fully ready');
       return res.status(200).send();
     }
 
     // All other methods require authentication
     const slackToken = await authenticateRequest(req);
     if (!slackToken) {
-      console.log('Authentication failed for method:', method);
+      console.log('❌ Authentication failed for method:', method);
+      console.log('❌ Available tokens:', Array.from(tokens.keys()).map(t => t.substring(0, 15) + '...'));
+      console.log('❌ Request auth header:', req.headers.authorization?.substring(0, 30) + '...');
+      
       return res.status(401).json({ 
         jsonrpc: '2.0',
-        error: { code: -32001, message: 'Authentication required - please connect your Slack token first' },
+        error: { 
+          code: -32001, 
+          message: 'Authentication required - please connect your Slack token first',
+          data: {
+            authUrl: `https://${req.get('host')}/connect`,
+            instructions: 'Visit the connect URL to authenticate with your Slack token'
+          }
+        },
         id: id
       });
     }
 
+    console.log('✅ Authentication successful for method:', method);
     const slackClient = new SlackClient(slackToken);
 
     switch (method) {
       case 'tools/list':
-        console.log('Handling tools/list request');
+        console.log('🔧 Handling tools/list request');
         const toolsResponse = { 
           jsonrpc: '2.0',
           result: {
@@ -469,13 +532,13 @@ app.post('/', async (req, res) => {
           },
           id: id
         };
-        console.log('Tools list sent:', toolsResponse.result.tools.length, 'tools');
+        console.log('🔧 Tools list sent:', toolsResponse.result.tools.length, 'tools available');
         return res.json(toolsResponse);
       
       case 'tools/call':
-        console.log('Handling tools/call request');
+        console.log('🔧 Handling tools/call request');
         const { name, arguments: args } = params;
-        console.log('Tool:', name, 'Args:', args);
+        console.log('🔧 Tool:', name, 'Args:', args);
         
         let toolResult;
         
@@ -545,11 +608,11 @@ app.post('/', async (req, res) => {
           result: toolResult,
           id: id
         };
-        console.log('Tool call completed:', name);
+        console.log('🔧 Tool call completed:', name);
         return res.json(callResponse);
       
       default:
-        console.log('Unknown method:', method);
+        console.log('❌ Unknown method:', method);
         return res.status(400).json({ 
           jsonrpc: '2.0',
           error: { code: -32601, message: `Unknown method: ${method}` },
@@ -557,7 +620,7 @@ app.post('/', async (req, res) => {
         });
     }
   } catch (error) {
-    console.error('MCP Error:', error);
+    console.error('❌ MCP Error:', error);
     return res.status(500).json({ 
       jsonrpc: '2.0',
       error: { code: -32603, message: error.message },
