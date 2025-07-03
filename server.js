@@ -60,18 +60,56 @@ class SlackClient {
   async getUsers(limit = 100) { return await this.makeRequest('users.list', { limit }); }
 }
 
-// Authentication
+// Authentication - Enhanced with debugging and flexibility
 async function authenticateRequest(req) {
+  console.log('=== AUTH DEBUG ===');
+  console.log('Method:', req.method);
+  console.log('URL:', req.url);
+  console.log('Headers:', JSON.stringify(req.headers, null, 2));
+  
   const authHeader = req.headers.authorization;
   let slackToken = null;
-  if (authHeader && authHeader.startsWith('Bearer xoxp-')) {
-    slackToken = authHeader.substring(7);
+  
+  // Try multiple auth header formats
+  if (authHeader) {
+    console.log('Authorization header found:', authHeader);
+    if (authHeader.startsWith('Bearer xoxp-')) {
+      slackToken = authHeader.substring(7);
+      console.log('Found Bearer xoxp- format');
+    } else if (authHeader.startsWith('Bearer ')) {
+      slackToken = authHeader.substring(7);
+      console.log('Found Bearer format, token:', slackToken ? slackToken.substring(0, 10) + '...' : 'null');
+    } else if (authHeader.startsWith('xoxp-')) {
+      slackToken = authHeader;
+      console.log('Found direct xoxp- format');
+    }
   }
-  if (!slackToken || !slackToken.startsWith('xoxp-')) return null;
+  
+  // Also check for token in other headers
+  if (!slackToken) {
+    slackToken = req.headers['x-api-key'] || req.headers['x-auth-token'] || req.headers['x-slack-token'];
+    if (slackToken) {
+      console.log('Found token in alternative header');
+    }
+  }
+  
+  console.log('Final extracted token:', slackToken ? slackToken.substring(0, 20) + '...' : 'null');
+  console.log('Token starts with xoxp-:', slackToken ? slackToken.startsWith('xoxp-') : false);
+  
+  if (!slackToken || !slackToken.startsWith('xoxp-')) {
+    console.log('Auth failed: No valid Slack token found');
+    return null;
+  }
+  
   try {
-    await new SlackClient(slackToken).testAuth();
+    const client = new SlackClient(slackToken);
+    const authTest = await client.testAuth();
+    console.log('Auth successful for user:', authTest.user_id);
     return slackToken;
-  } catch { return null; }
+  } catch (error) {
+    console.log('Auth failed - Slack API error:', error.message);
+    return null;
+  }
 }
 
 // Main routes
@@ -385,55 +423,126 @@ app.post('/token', (req, res) => {
   res.json(tokenResponse);
 });
 
-// MCP Protocol
+// MCP Protocol - Enhanced with better error handling
 app.post('/', async (req, res) => {
+  console.log('=== MCP REQUEST ===');
+  console.log('Body:', JSON.stringify(req.body, null, 2));
+  
   const slackToken = await authenticateRequest(req);
-  if (!slackToken) return res.status(401).json({ error: 'Authentication required' });
+  if (!slackToken) {
+    console.log('MCP request failed: Authentication required');
+    return res.status(401).json({ 
+      error: 'Authentication required',
+      message: 'Please provide a valid Slack token in Authorization header as "Bearer xoxp-your-token"'
+    });
+  }
   
   const slackClient = new SlackClient(slackToken);
   const { method, params } = req.body || {};
+  
+  console.log('MCP method:', method);
+  console.log('MCP params:', params);
 
   try {
     switch (method) {
       case 'initialize':
-        return res.json({ 
+        console.log('Handling initialize request');
+        const initResponse = { 
           protocolVersion: '2024-11-05', 
           capabilities: { tools: {} }, 
-          serverInfo: { name: 'slack-mcp-server', version: '1.0.0' } 
-        });
+          serverInfo: { 
+            name: 'slack-mcp-server', 
+            version: '1.0.0',
+            description: 'Slack MCP Server with OAuth support'
+          } 
+        };
+        console.log('Initialize response:', initResponse);
+        return res.json(initResponse);
       
       case 'tools/list':
-        return res.json({ tools: [
-          { name: 'slack_get_channels', description: 'List channels', inputSchema: { type: 'object', properties: { limit: { type: 'number', default: 100 } } } },
-          { name: 'slack_get_channel_history', description: 'Get channel messages', inputSchema: { type: 'object', properties: { channel: { type: 'string' }, limit: { type: 'number', default: 50 } }, required: ['channel'] } },
-          { name: 'slack_send_message', description: 'Send message', inputSchema: { type: 'object', properties: { channel: { type: 'string' }, text: { type: 'string' } }, required: ['channel', 'text'] } }
-        ]});
+        console.log('Handling tools/list request');
+        const toolsResponse = { tools: [
+          { 
+            name: 'slack_get_channels', 
+            description: 'List available Slack channels', 
+            inputSchema: { 
+              type: 'object', 
+              properties: { 
+                limit: { type: 'number', description: 'Maximum number of channels to return', default: 100 } 
+              } 
+            } 
+          },
+          { 
+            name: 'slack_get_channel_history', 
+            description: 'Get recent messages from a specific channel', 
+            inputSchema: { 
+              type: 'object', 
+              properties: { 
+                channel: { type: 'string', description: 'Channel ID or name' }, 
+                limit: { type: 'number', description: 'Number of messages to retrieve', default: 50 } 
+              }, 
+              required: ['channel'] 
+            } 
+          },
+          { 
+            name: 'slack_send_message', 
+            description: 'Send a message to a Slack channel', 
+            inputSchema: { 
+              type: 'object', 
+              properties: { 
+                channel: { type: 'string', description: 'Channel ID or name' }, 
+                text: { type: 'string', description: 'Message text to send' } 
+              }, 
+              required: ['channel', 'text'] 
+            } 
+          }
+        ]};
+        console.log('Tools response:', JSON.stringify(toolsResponse, null, 2));
+        return res.json(toolsResponse);
       
       case 'tools/call':
+        console.log('Handling tools/call request');
         const { name, arguments: args } = params;
+        console.log('Tool name:', name);
+        console.log('Tool arguments:', args);
+        
         switch (name) {
           case 'slack_get_channels':
-            const channelsData = await slackClient.getChannels('public_channel', args.limit || 100);
-            return res.json({ content: [{ type: 'text', text: `Found ${channelsData.channels.length} channels:\n\n` + channelsData.channels.map(ch => `#${ch.name} (${ch.num_members} members)`).join('\n') }] });
+            console.log('Executing slack_get_channels');
+            const channelsData = await slackClient.getChannels('public_channel', args?.limit || 100);
+            const channelsResult = { content: [{ type: 'text', text: `Found ${channelsData.channels.length} channels:\n\n` + channelsData.channels.map(ch => `#${ch.name} (${ch.num_members} members)`).join('\n') }] };
+            console.log('Channels result:', channelsResult);
+            return res.json(channelsResult);
           
           case 'slack_get_channel_history':
-            const historyData = await slackClient.getChannelHistory(args.channel, args.limit || 50);
+            console.log('Executing slack_get_channel_history');
+            const historyData = await slackClient.getChannelHistory(args.channel, args?.limit || 50);
             const messages = historyData.messages.slice(0, 10).map(msg => `${new Date(parseFloat(msg.ts) * 1000).toLocaleString()}: ${msg.text || 'No text'}`);
-            return res.json({ content: [{ type: 'text', text: `Recent messages in ${args.channel}:\n\n${messages.join('\n')}` }] });
+            const historyResult = { content: [{ type: 'text', text: `Recent messages in ${args.channel}:\n\n${messages.join('\n')}` }] };
+            console.log('History result:', historyResult);
+            return res.json(historyResult);
           
           case 'slack_send_message':
+            console.log('Executing slack_send_message');
             await slackClient.sendMessage(args.channel, args.text);
-            return res.json({ content: [{ type: 'text', text: `✅ Message sent to ${args.channel}` }] });
+            const sendResult = { content: [{ type: 'text', text: `✅ Message sent to ${args.channel}` }] };
+            console.log('Send result:', sendResult);
+            return res.json(sendResult);
           
           default:
+            console.log('Unknown tool:', name);
             throw new Error(`Unknown tool: ${name}`);
         }
       
       default:
+        console.log('Unknown method:', method);
         return res.status(400).json({ error: `Unknown method: ${method}` });
     }
   } catch (error) {
-    return res.json({ content: [{ type: 'text', text: `❌ Error: ${error.message}` }], isError: true });
+    console.log('MCP Error:', error);
+    const errorResponse = { content: [{ type: 'text', text: `❌ Error: ${error.message}` }], isError: true };
+    console.log('Error response:', errorResponse);
+    return res.json(errorResponse);
   }
 });
 
