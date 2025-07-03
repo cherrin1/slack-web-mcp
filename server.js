@@ -453,7 +453,11 @@ app.post('/', async (req, res) => {
           jsonrpc: '2.0',
           result: {
             protocolVersion: '2024-11-05', 
-            capabilities: { tools: {} }, 
+            capabilities: { 
+              tools: {
+                listChanged: true
+              }
+            }, 
             serverInfo: { 
               name: 'slack-mcp-server', 
               version: '1.0.0',
@@ -518,41 +522,55 @@ app.post('/', async (req, res) => {
         console.log('Tool name:', name);
         console.log('Tool arguments:', args);
         
+        let toolResult;
         switch (name) {
           case 'slack_get_channels':
             console.log('Executing slack_get_channels');
             const channelsData = await slackClient.getChannels('public_channel', args?.limit || 100);
-            const channelsResult = { content: [{ type: 'text', text: `Found ${channelsData.channels.length} channels:\n\n` + channelsData.channels.map(ch => `#${ch.name} (${ch.num_members} members)`).join('\n') }] };
-            console.log('Channels result:', channelsResult);
-            return res.json(channelsResult);
+            toolResult = { content: [{ type: 'text', text: `Found ${channelsData.channels.length} channels:\n\n` + channelsData.channels.map(ch => `#${ch.name} (${ch.num_members} members)`).join('\n') }] };
+            break;
           
           case 'slack_get_channel_history':
             console.log('Executing slack_get_channel_history');
             const historyData = await slackClient.getChannelHistory(args.channel, args?.limit || 50);
             const messages = historyData.messages.slice(0, 10).map(msg => `${new Date(parseFloat(msg.ts) * 1000).toLocaleString()}: ${msg.text || 'No text'}`);
-            const historyResult = { content: [{ type: 'text', text: `Recent messages in ${args.channel}:\n\n${messages.join('\n')}` }] };
-            console.log('History result:', historyResult);
-            return res.json(historyResult);
+            toolResult = { content: [{ type: 'text', text: `Recent messages in ${args.channel}:\n\n${messages.join('\n')}` }] };
+            break;
           
           case 'slack_send_message':
             console.log('Executing slack_send_message');
             await slackClient.sendMessage(args.channel, args.text);
-            const sendResult = { content: [{ type: 'text', text: `✅ Message sent to ${args.channel}` }] };
-            console.log('Send result:', sendResult);
-            return res.json(sendResult);
+            toolResult = { content: [{ type: 'text', text: `✅ Message sent to ${args.channel}` }] };
+            break;
           
           default:
             console.log('Unknown tool:', name);
             throw new Error(`Unknown tool: ${name}`);
         }
+        
+        const callResponse = {
+          jsonrpc: '2.0',
+          result: toolResult,
+          id: id
+        };
+        console.log('Tool call result:', callResponse);
+        return res.json(callResponse);
       
       default:
         console.log('Unknown method:', method);
-        return res.status(400).json({ error: `Unknown method: ${method}` });
+        return res.status(400).json({ 
+          jsonrpc: '2.0',
+          error: { code: -32601, message: `Unknown method: ${method}` },
+          id: id
+        });
     }
   } catch (error) {
     console.log('MCP Error:', error);
-    const errorResponse = { content: [{ type: 'text', text: `❌ Error: ${error.message}` }], isError: true };
+    const errorResponse = { 
+      jsonrpc: '2.0',
+      error: { code: -32603, message: error.message },
+      id: id
+    };
     console.log('Error response:', errorResponse);
     return res.json(errorResponse);
   }
