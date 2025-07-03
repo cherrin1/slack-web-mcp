@@ -107,8 +107,9 @@ app.get('/debug', (req, res) => {
   });
 });
 
-// Test endpoint to verify tools/list works
-app.get('/test-tools', (req, res) => {
+// Alternative: Simple tools endpoint for Claude (non-MCP)
+app.get('/tools', (req, res) => {
+  console.log('🔧 Direct /tools endpoint called');
   res.json({
     tools: [
       { 
@@ -542,7 +543,7 @@ app.post('/', async (req, res) => {
       return res.json(toolsResponse);
     }
 
-    // Simplified initialize - just return basic capabilities
+    // EXPERIMENTAL: Return tools directly in initialize response
     if (method === 'initialize') {
       console.log('🔧 Initialize called with params:', JSON.stringify(params, null, 2));
       const initResponse = { 
@@ -550,16 +551,57 @@ app.post('/', async (req, res) => {
         result: {
           protocolVersion: '2024-11-05', 
           capabilities: { 
-            tools: {}
+            tools: {
+              listChanged: true
+            }
           }, 
           serverInfo: { 
             name: 'slack-mcp-server', 
-            version: '1.0.0'
-          }
+            version: '1.0.0',
+            description: 'Slack MCP Server with 3 tools available'
+          },
+          // EXPERIMENTAL: Include tools directly in initialize
+          tools: [
+            { 
+              name: 'slack_get_channels', 
+              description: 'List available Slack channels (requires authentication)', 
+              inputSchema: { 
+                type: 'object', 
+                properties: { 
+                  limit: { type: 'number', description: 'Maximum number of channels to return', default: 100 } 
+                } 
+              } 
+            },
+            { 
+              name: 'slack_get_channel_history', 
+              description: 'Get recent messages from a specific channel (requires authentication)', 
+              inputSchema: { 
+                type: 'object', 
+                properties: { 
+                  channel: { type: 'string', description: 'Channel ID or name' }, 
+                  limit: { type: 'number', description: 'Number of messages to retrieve', default: 50 } 
+                }, 
+                required: ['channel'] 
+              } 
+            },
+            { 
+              name: 'slack_send_message', 
+              description: 'Send a message to a Slack channel (requires authentication)', 
+              inputSchema: { 
+                type: 'object', 
+                properties: { 
+                  channel: { type: 'string', description: 'Channel ID or name' }, 
+                  text: { type: 'string', description: 'Message text to send' } 
+                }, 
+                required: ['channel', 'text'] 
+              } 
+            }
+          ]
         },
         id: id
       };
-      console.log('🔧 Initialize response:', JSON.stringify(initResponse, null, 2));
+      console.log('🔧 Initialize response with embedded tools:', JSON.stringify(initResponse, null, 2));
+      console.log('🔧 TOOLS SHOULD NOW BE VISIBLE TO CLAUDE');
       return res.json(initResponse);
     }
 
