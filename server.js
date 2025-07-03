@@ -202,7 +202,7 @@ app.post('/oauth/token', (req, res) => {
       error_description: 'code is required'
     });
   }
-});  
+  });
   // Rest of the code stays the same...
 
 app.post('/oauth/store-token', (req, res) => {
@@ -212,7 +212,77 @@ app.post('/oauth/store-token', (req, res) => {
   }
   res.json({ success: true });
 });
+// OAuth routes without /oauth prefix (for Claude Web compatibility)
+app.get('/authorize', (req, res) => {
+  console.log('Direct /authorize called:', req.query);
+  const { client_id, redirect_uri, state, response_type } = req.query;
+  
+  if (!redirect_uri) {
+    return res.status(400).json({ error: 'redirect_uri is required' });
+  }
+  
+  if (!client_id) {
+    return res.status(400).json({ error: 'client_id is required' });
+  }
+  
+  const authCode = 'claude_web_' + Date.now() + '_' + Math.random().toString(36).substring(7);
+  const baseUrl = `https://${req.get('host')}`;
+  
+  const connectUrl = `${baseUrl}/connect?oauth=true&client=claude-web&auth_code=${authCode}&redirect_uri=${encodeURIComponent(redirect_uri)}&state=${state || ''}&client_id=${client_id}`;
+  
+  console.log('Redirecting to:', connectUrl);
+  res.redirect(302, connectUrl);
+});
 
+app.post('/token', (req, res) => {
+  console.log('Direct /token request:', req.body);
+  
+  const { grant_type, code, client_id, redirect_uri } = req.body;
+  
+  if (grant_type !== 'authorization_code') {
+    return res.status(400).json({ 
+      error: 'unsupported_grant_type',
+      error_description: 'Only authorization_code is supported'
+    });
+  }
+  
+  if (!code) {
+    return res.status(400).json({ 
+      error: 'invalid_request',
+      error_description: 'authorization_code is required'
+    });
+  }
+  
+  if (!client_id || client_id !== 'slack-mcp-claude-web') {
+    return res.status(400).json({ 
+      error: 'invalid_client',
+      error_description: 'Invalid client_id'
+    });
+  }
+  
+  const slackToken = oauthCodes.get(code);
+  if (!slackToken) {
+    console.log('Authorization code not found:', code);
+    return res.status(400).json({ 
+      error: 'invalid_grant',
+      error_description: 'Invalid or expired authorization code'
+    });
+  }
+  
+  // Clean up the code
+  oauthCodes.delete(code);
+  
+  const tokenResponse = {
+    access_token: slackToken,
+    token_type: 'bearer',
+    expires_in: 31536000,
+    refresh_token: `refresh_${Date.now()}_${Math.random().toString(36)}`,
+    scope: 'slack:read slack:write'
+  };
+  
+  console.log('Returning token response');
+  res.json(tokenResponse);
+});
 // MCP Protocol
 app.post('/', async (req, res) => {
   const slackToken = await authenticateRequest(req);
