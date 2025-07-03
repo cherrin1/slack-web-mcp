@@ -202,7 +202,7 @@ app.post('/oauth/token', (req, res) => {
       error_description: 'code is required'
     });
   }
-  
+});  
   // Rest of the code stays the same...
 
 app.post('/oauth/store-token', (req, res) => {
