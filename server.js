@@ -451,25 +451,53 @@ app.post('/', async (req, res) => {
     // Handle initialization without auth
     if (method === 'initialize') {
       console.log('🔧 Handling initialize request');
-      const initResponse = { 
-        jsonrpc: '2.0',
-        result: {
-          protocolVersion: '2024-11-05', 
-          capabilities: { 
-            tools: {
-              listChanged: true
+      
+      // Check if we have authentication for this request
+      const hasAuth = req.headers.authorization && req.headers.authorization.startsWith('Bearer xoxp-');
+      
+      if (hasAuth) {
+        console.log('🔧 Initialize has auth - returning capabilities with tools');
+        const initResponse = { 
+          jsonrpc: '2.0',
+          result: {
+            protocolVersion: '2024-11-05', 
+            capabilities: { 
+              tools: {
+                listChanged: true
+              }
+            }, 
+            serverInfo: { 
+              name: 'slack-mcp-server', 
+              version: '1.0.0',
+              description: 'Slack MCP Server - Connect your Slack workspace to Claude'
             }
-          }, 
-          serverInfo: { 
-            name: 'slack-mcp-server', 
-            version: '1.0.0',
-            description: 'Slack MCP Server - Connect your Slack workspace to Claude'
-          }
-        },
-        id: id
-      };
-      console.log('🔧 Initialize response sent - Claude should call tools/list next');
-      return res.json(initResponse);
+          },
+          id: id
+        };
+        console.log('🔧 Initialize response sent with tools capability');
+        return res.json(initResponse);
+      } else {
+        console.log('🔧 Initialize without auth - returning basic capabilities');
+        const initResponse = { 
+          jsonrpc: '2.0',
+          result: {
+            protocolVersion: '2024-11-05', 
+            capabilities: { 
+              tools: {
+                listChanged: true
+              }
+            }, 
+            serverInfo: { 
+              name: 'slack-mcp-server', 
+              version: '1.0.0',
+              description: 'Slack MCP Server - Connect your Slack workspace to Claude (not authenticated)'
+            }
+          },
+          id: id
+        };
+        console.log('🔧 Initialize response sent - waiting for authenticated request');
+        return res.json(initResponse);
+      }
     }
 
     // Handle notifications without auth
