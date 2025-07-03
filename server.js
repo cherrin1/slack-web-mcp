@@ -178,7 +178,9 @@ app.post('/messages/:sessionId', async (req, res) => {
         result: {
           protocolVersion: '2024-11-05', 
           capabilities: { 
-            tools: {}
+            tools: {
+              listChanged: true
+            }
           }, 
           serverInfo: { 
             name: 'slack-mcp-server', 
@@ -189,11 +191,13 @@ app.post('/messages/:sessionId', async (req, res) => {
         id: id
       };
       console.log('🔧 SSE Initialize response:', JSON.stringify(initResponse, null, 2));
+      console.log('🔧 SSE SHOULD NOW CALL tools/list');
       return res.json(initResponse);
     }
 
     if (method === 'notifications/initialized') {
       console.log('🔧 SSE Notifications/initialized');
+      console.log('🔧 SSE SERVER READY - WAITING FOR tools/list');
       return res.status(200).send();
     }
 
