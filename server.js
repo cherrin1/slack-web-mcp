@@ -438,7 +438,7 @@ app.post('/token', (req, res) => {
   res.json(tokenResponse);
 });
 
-// MCP Protocol - FORCE Claude to acknowledge tools
+// MCP Protocol - FIXED: Allow tools discovery without authentication
 app.post('/', async (req, res) => {
   console.log('🔧 === MCP REQUEST ===');
   console.log('🔧 Method:', req.body?.method);
@@ -448,9 +448,9 @@ app.post('/', async (req, res) => {
   const { method, params, id } = req.body || {};
 
   try {
-    // CRITICAL FIX: Always return tools/list capability without authentication
+    // Initialize - always return tools capability
     if (method === 'initialize') {
-      console.log('🔧 Initialize - ALWAYS returning tools capability');
+      console.log('🔧 Initialize - returning tools capability');
       const initResponse = { 
         jsonrpc: '2.0',
         result: {
@@ -475,9 +475,9 @@ app.post('/', async (req, res) => {
       return res.status(200).send();
     }
 
-    // CRITICAL FIX: Allow tools/list WITHOUT authentication first
+    // FIXED: ALWAYS return tools list without authentication check
     if (method === 'tools/list') {
-      console.log('🎉 TOOLS/LIST CALLED!');
+      console.log('🎉 TOOLS/LIST CALLED - returning tools WITHOUT authentication');
       
       const toolsResponse = { 
         jsonrpc: '2.0',
@@ -485,7 +485,7 @@ app.post('/', async (req, res) => {
           tools: [
             { 
               name: 'slack_get_channels', 
-              description: 'List available Slack channels', 
+              description: 'List available Slack channels (requires authentication)', 
               inputSchema: { 
                 type: 'object', 
                 properties: { 
@@ -495,7 +495,7 @@ app.post('/', async (req, res) => {
             },
             { 
               name: 'slack_get_channel_history', 
-              description: 'Get recent messages from a specific channel', 
+              description: 'Get recent messages from a specific channel (requires authentication)', 
               inputSchema: { 
                 type: 'object', 
                 properties: { 
@@ -507,7 +507,7 @@ app.post('/', async (req, res) => {
             },
             { 
               name: 'slack_send_message', 
-              description: 'Send a message to a Slack channel', 
+              description: 'Send a message to a Slack channel (requires authentication)', 
               inputSchema: { 
                 type: 'object', 
                 properties: { 
@@ -525,7 +525,7 @@ app.post('/', async (req, res) => {
       return res.json(toolsResponse);
     }
 
-    // REQUIRE authentication for tools/call
+    // REQUIRE authentication ONLY for tools/call
     if (method === 'tools/call') {
       const slackToken = await authenticateRequest(req);
       if (!slackToken) {
@@ -537,7 +537,7 @@ app.post('/', async (req, res) => {
             message: 'Authentication required for tool calls. Please connect your Slack token first.',
             data: {
               authUrl: `https://${req.get('host')}/connect`,
-              instructions: 'Complete OAuth flow to authenticate'
+              instructions: 'Visit the connect URL to authenticate your Slack workspace'
             }
           },
           id: id
@@ -591,6 +591,7 @@ app.post('/', async (req, res) => {
             };
         }
       } catch (error) {
+        console.error('Tool execution error:', error);
         toolResult = {
           content: [{ type: 'text', text: `Error executing ${name}: ${error.message}` }],
           isError: true
