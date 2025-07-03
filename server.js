@@ -107,6 +107,48 @@ app.get('/debug', (req, res) => {
   });
 });
 
+// Test endpoint to verify tools/list works
+app.get('/test-tools', (req, res) => {
+  res.json({
+    tools: [
+      { 
+        name: 'slack_get_channels', 
+        description: 'List available Slack channels (requires authentication)', 
+        inputSchema: { 
+          type: 'object', 
+          properties: { 
+            limit: { type: 'number', description: 'Maximum number of channels to return', default: 100 } 
+          } 
+        } 
+      },
+      { 
+        name: 'slack_get_channel_history', 
+        description: 'Get recent messages from a specific channel (requires authentication)', 
+        inputSchema: { 
+          type: 'object', 
+          properties: { 
+            channel: { type: 'string', description: 'Channel ID or name' }, 
+            limit: { type: 'number', description: 'Number of messages to retrieve', default: 50 } 
+          }, 
+          required: ['channel'] 
+        } 
+      },
+      { 
+        name: 'slack_send_message', 
+        description: 'Send a message to a Slack channel (requires authentication)', 
+        inputSchema: { 
+          type: 'object', 
+          properties: { 
+            channel: { type: 'string', description: 'Channel ID or name' }, 
+            text: { type: 'string', description: 'Message text to send' } 
+          }, 
+          required: ['channel', 'text'] 
+        } 
+      }
+    ]
+  });
+});
+
 // Connect page with OAuth support
 app.get('/connect', (req, res) => {
   const { oauth, client, auth_code, redirect_uri, state, client_id } = req.query;
@@ -443,6 +485,8 @@ app.post('/', async (req, res) => {
   console.log('🔧 === MCP REQUEST ===');
   console.log('🔧 Method:', req.body?.method);
   console.log('🔧 Headers Authorization:', req.headers.authorization ? 'Present (' + req.headers.authorization.substring(0, 20) + '...)' : 'Missing');
+  console.log('🔧 Headers Content-Type:', req.headers['content-type']);
+  console.log('🔧 Request body:', JSON.stringify(req.body, null, 2));
   console.log('🔧 Current server stats:', users.size, 'users,', tokens.size, 'tokens');
   
   const { method, params, id } = req.body || {};
@@ -456,7 +500,9 @@ app.post('/', async (req, res) => {
         result: {
           protocolVersion: '2024-11-05', 
           capabilities: { 
-            tools: {}
+            tools: {
+              listChanged: true
+            }
           }, 
           serverInfo: { 
             name: 'slack-mcp-server', 
@@ -466,7 +512,7 @@ app.post('/', async (req, res) => {
         },
         id: id
       };
-      console.log('🔧 Initialize response sent - Claude should call tools/list');
+      console.log('🔧 Initialize response:', JSON.stringify(initResponse, null, 2));
       return res.json(initResponse);
     }
 
@@ -521,7 +567,7 @@ app.post('/', async (req, res) => {
         },
         id: id
       };
-      console.log('🎉 Tools list sent successfully:', toolsResponse.result.tools.length, 'tools');
+      console.log('🎉 Tools list response:', JSON.stringify(toolsResponse, null, 2));
       return res.json(toolsResponse);
     }
 
