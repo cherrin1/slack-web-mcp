@@ -432,71 +432,83 @@ app.post('/', async (req, res) => {
   if (!slackToken) {
     console.log('MCP request failed: Authentication required');
     return res.status(401).json({ 
-      error: 'Authentication required',
-      message: 'Please provide a valid Slack token in Authorization header as "Bearer xoxp-your-token"'
+      jsonrpc: '2.0',
+      error: { code: -32001, message: 'Authentication required' },
+      id: req.body?.id || null
     });
   }
   
   const slackClient = new SlackClient(slackToken);
-  const { method, params } = req.body || {};
+  const { method, params, id } = req.body || {};
   
   console.log('MCP method:', method);
   console.log('MCP params:', params);
+  console.log('Request ID:', id);
 
   try {
     switch (method) {
       case 'initialize':
         console.log('Handling initialize request');
         const initResponse = { 
-          protocolVersion: '2024-11-05', 
-          capabilities: { tools: {} }, 
-          serverInfo: { 
-            name: 'slack-mcp-server', 
-            version: '1.0.0',
-            description: 'Slack MCP Server with OAuth support'
-          } 
+          jsonrpc: '2.0',
+          result: {
+            protocolVersion: '2024-11-05', 
+            capabilities: { tools: {} }, 
+            serverInfo: { 
+              name: 'slack-mcp-server', 
+              version: '1.0.0',
+              description: 'Slack MCP Server with OAuth support'
+            }
+          },
+          id: id
         };
         console.log('Initialize response:', initResponse);
         return res.json(initResponse);
       
       case 'tools/list':
         console.log('Handling tools/list request');
-        const toolsResponse = { tools: [
-          { 
-            name: 'slack_get_channels', 
-            description: 'List available Slack channels', 
-            inputSchema: { 
-              type: 'object', 
-              properties: { 
-                limit: { type: 'number', description: 'Maximum number of channels to return', default: 100 } 
-              } 
-            } 
+        const toolsResponse = { 
+          jsonrpc: '2.0',
+          result: {
+            tools: [
+              { 
+                name: 'slack_get_channels', 
+                description: 'List available Slack channels', 
+                inputSchema: { 
+                  type: 'object', 
+                  properties: { 
+                    limit: { type: 'number', description: 'Maximum number of channels to return', default: 100 } 
+                  } 
+                } 
+              },
+              { 
+                name: 'slack_get_channel_history', 
+                description: 'Get recent messages from a specific channel', 
+                inputSchema: { 
+                  type: 'object', 
+                  properties: { 
+                    channel: { type: 'string', description: 'Channel ID or name' }, 
+                    limit: { type: 'number', description: 'Number of messages to retrieve', default: 50 } 
+                  }, 
+                  required: ['channel'] 
+                } 
+              },
+              { 
+                name: 'slack_send_message', 
+                description: 'Send a message to a Slack channel', 
+                inputSchema: { 
+                  type: 'object', 
+                  properties: { 
+                    channel: { type: 'string', description: 'Channel ID or name' }, 
+                    text: { type: 'string', description: 'Message text to send' } 
+                  }, 
+                  required: ['channel', 'text'] 
+                } 
+              }
+            ]
           },
-          { 
-            name: 'slack_get_channel_history', 
-            description: 'Get recent messages from a specific channel', 
-            inputSchema: { 
-              type: 'object', 
-              properties: { 
-                channel: { type: 'string', description: 'Channel ID or name' }, 
-                limit: { type: 'number', description: 'Number of messages to retrieve', default: 50 } 
-              }, 
-              required: ['channel'] 
-            } 
-          },
-          { 
-            name: 'slack_send_message', 
-            description: 'Send a message to a Slack channel', 
-            inputSchema: { 
-              type: 'object', 
-              properties: { 
-                channel: { type: 'string', description: 'Channel ID or name' }, 
-                text: { type: 'string', description: 'Message text to send' } 
-              }, 
-              required: ['channel', 'text'] 
-            } 
-          }
-        ]};
+          id: id
+        };
         console.log('Tools response:', JSON.stringify(toolsResponse, null, 2));
         return res.json(toolsResponse);
       
