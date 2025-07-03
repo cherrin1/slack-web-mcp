@@ -200,9 +200,11 @@ app.get('/', (req, res) => {
 
 // **SSE Endpoint for Claude MCP Integration**
 app.get('/sse', async (req, res) => {
-  console.log('=== SSE GET CONNECTION STARTED ===');
+  console.log('=== SSE CONNECTION STARTED ===');
   console.log('SSE Request Headers:', JSON.stringify(req.headers, null, 2));
-  console.log('SSE Request Query:', JSON.stringify(req.query, null, 2));
+  
+  // For now, skip authentication for SSE to test connection
+  // TODO: Implement proper OAuth flow as per MCP spec
   
   // Set up SSE headers
   res.writeHead(200, {
@@ -210,8 +212,7 @@ app.get('/sse', async (req, res) => {
     'Cache-Control': 'no-cache',
     'Connection': 'keep-alive',
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Cache-Control, Authorization, Content-Type',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
+    'Access-Control-Allow-Headers': 'Cache-Control'
   });
   
   // SSE helper function
@@ -227,15 +228,6 @@ app.get('/sse', async (req, res) => {
     method: 'notifications/initialized',
     params: {}
   });
-  
-  // Send capabilities after connection
-  setTimeout(() => {
-    sendSSEMessage({
-      jsonrpc: '2.0',
-      method: 'notifications/tools/list_changed',
-      params: {}
-    });
-  }, 100);
   
   // Handle connection close
   req.on('close', () => {
