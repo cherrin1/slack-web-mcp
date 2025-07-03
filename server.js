@@ -48,38 +48,19 @@ class SlackClient {
     return data;
   }
 
-  async testAuth() { 
-    return await this.makeRequest('auth.test'); 
-  }
-  
+  async testAuth() { return await this.makeRequest('auth.test'); }
   async getChannels(limit = 100) { 
     return await this.makeRequest('conversations.list', { 
       types: 'public_channel,private_channel', 
       limit 
     }); 
   }
-  
   async getChannelHistory(channel, limit = 50) { 
     return await this.makeRequest('conversations.history', { channel, limit }); 
   }
-  
   async sendMessage(channel, text) { 
     return await this.makeRequest('chat.postMessage', { channel, text }, 'POST'); 
   }
-}
-
-// Authentication helper
-function getAuthToken(req) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) return null;
-  
-  const token = authHeader.replace('Bearer ', '');
-  if (!token.startsWith('xoxp-')) return null;
-  
-  // Check if token is registered
-  if (!tokens.has(token)) return null;
-  
-  return token;
 }
 
 // Routes
@@ -87,18 +68,9 @@ app.get('/', (req, res) => {
   console.log('GET / - Root endpoint called');
   res.json({
     name: "slack-mcp-server",
-    version: "1.0.0",
-    description: "Slack MCP Server for Claude",
+    version: "2.0.0",
+    description: "Clean Slack MCP Server for Claude",
     status: "running"
-  });
-});
-
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'healthy',
-    timestamp: new Date().toISOString(),
-    users: users.size,
-    tokens: tokens.size
   });
 });
 
@@ -110,30 +82,22 @@ app.post('/', async (req, res) => {
 
   try {
     if (method === 'initialize') {
-      console.log('Initialize request received');
       return res.json({
         jsonrpc: '2.0',
         result: {
           protocolVersion: '2024-11-05',
-          capabilities: {
-            tools: {}
-          },
-          serverInfo: {
-            name: 'slack-mcp-server',
-            version: '1.0.0'
-          }
+          capabilities: { tools: {} },
+          serverInfo: { name: 'slack-mcp-server', version: '2.0.0' }
         },
         id: id
       });
     }
 
     if (method === 'notifications/initialized') {
-      console.log('Notifications/initialized received');
       return res.status(200).send();
     }
 
     if (method === 'tools/list') {
-      console.log('Tools/list request received');
       return res.json({
         jsonrpc: '2.0',
         result: {
@@ -141,22 +105,14 @@ app.post('/', async (req, res) => {
             {
               name: 'slack_get_channels',
               description: 'List Slack channels',
-              inputSchema: {
-                type: 'object',
-                properties: {
-                  limit: { type: 'number', default: 100 }
-                }
-              }
+              inputSchema: { type: 'object', properties: { limit: { type: 'number', default: 100 } } }
             },
             {
               name: 'slack_get_history',
               description: 'Get channel message history',
               inputSchema: {
                 type: 'object',
-                properties: {
-                  channel: { type: 'string' },
-                  limit: { type: 'number', default: 50 }
-                },
+                properties: { channel: { type: 'string' }, limit: { type: 'number', default: 50 } },
                 required: ['channel']
               }
             },
@@ -165,10 +121,7 @@ app.post('/', async (req, res) => {
               description: 'Send message to channel',
               inputSchema: {
                 type: 'object',
-                properties: {
-                  channel: { type: 'string' },
-                  text: { type: 'string' }
-                },
+                properties: { channel: { type: 'string' }, text: { type: 'string' } },
                 required: ['channel', 'text']
               }
             }
@@ -179,18 +132,16 @@ app.post('/', async (req, res) => {
     }
 
     if (method === 'tools/call') {
-      console.log('Tools/call request:', params?.name);
+      const authHeader = req.headers.authorization;
+      const token = authHeader?.replace('Bearer ', '');
       
-      const token = getAuthToken(req);
-      if (!token) {
+      if (!token || !token.startsWith('xoxp-') || !tokens.has(token)) {
         return res.json({
           jsonrpc: '2.0',
           error: {
             code: -32001,
-            message: 'Authentication required. Please connect your Slack workspace first.',
-            data: {
-              connectUrl: `https://${req.get('host')}/connect`
-            }
+            message: 'Authentication required',
+            data: { connectUrl: `https://${req.get('host')}/connect` }
           },
           id: id
         });
@@ -201,84 +152,42 @@ app.post('/', async (req, res) => {
       
       try {
         let result;
-        
         switch (name) {
           case 'slack_get_channels':
             const channels = await slack.getChannels(args?.limit);
-            result = {
-              content: [{
-                type: 'text',
-                text: `Found ${channels.channels.length} channels:\n\n` +
-                      channels.channels.map(ch => `• #${ch.name} (${ch.id})`).join('\n')
-              }]
-            };
+            result = { content: [{ type: 'text', text: `Channels: ${channels.channels.map(c => c.name).join(', ')}` }] };
             break;
-
           case 'slack_get_history':
             const history = await slack.getChannelHistory(args.channel, args?.limit);
-            result = {
-              content: [{
-                type: 'text',
-                text: `Messages in ${args.channel}:\n\n` +
-                      history.messages.slice(0, 10).map(msg => `• ${msg.user}: ${msg.text}`).join('\n')
-              }]
-            };
+            result = { content: [{ type: 'text', text: `Messages: ${history.messages.length} found` }] };
             break;
-
           case 'slack_send_message':
             await slack.sendMessage(args.channel, args.text);
-            result = {
-              content: [{
-                type: 'text',
-                text: `Message sent to ${args.channel}: "${args.text}"`
-              }]
-            };
+            result = { content: [{ type: 'text', text: 'Message sent successfully' }] };
             break;
-
           default:
-            result = {
-              content: [{ type: 'text', text: `Unknown tool: ${name}` }],
-              isError: true
-            };
+            result = { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
         }
-
-        return res.json({
-          jsonrpc: '2.0',
-          result: result,
-          id: id
-        });
-
+        return res.json({ jsonrpc: '2.0', result: result, id: id });
       } catch (error) {
-        console.error('Tool execution error:', error);
         return res.json({
           jsonrpc: '2.0',
-          result: {
-            content: [{ type: 'text', text: `Error: ${error.message}` }],
-            isError: true
-          },
+          result: { content: [{ type: 'text', text: `Error: ${error.message}` }], isError: true },
           id: id
         });
       }
     }
 
-    // Unknown method
     return res.json({
       jsonrpc: '2.0',
-      error: {
-        code: -32601,
-        message: `Unknown method: ${method}`
-      },
+      error: { code: -32601, message: `Unknown method: ${method}` },
       id: id
     });
 
   } catch (error) {
-    console.error('MCP handler error:', error);
     return res.json({
       jsonrpc: '2.0',
-      error: {
-        code: -32603,
-        message: error.message
-      },
+      error: { code: -32603, message: error.message },
       id: id
     });
   }
@@ -286,30 +195,16 @@ app.post('/', async (req, res) => {
 
 // Connect page
 app.get('/connect', (req, res) => {
-  const html = `<!DOCTYPE html>
+  res.send(`<!DOCTYPE html>
 <html>
-<head>
-  <title>Connect Slack</title>
-  <style>
-    body { font-family: Arial, sans-serif; max-width: 500px; margin: 50px auto; padding: 20px; }
-    input { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ddd; border-radius: 4px; }
-    button { width: 100%; padding: 12px; background: #007cba; color: white; border: none; border-radius: 4px; cursor: pointer; }
-    .status { margin: 10px 0; padding: 10px; border-radius: 4px; display: none; }
-    .success { background: #d4edda; color: #155724; }
-    .error { background: #f8d7da; color: #721c24; }
-  </style>
-</head>
-<body>
+<head><title>Connect Slack</title></head>
+<body style="font-family: Arial; max-width: 500px; margin: 50px auto; padding: 20px;">
   <h1>Connect Slack to Claude</h1>
-  <p>Get your token from <a href="https://api.slack.com/custom-integrations/legacy-tokens" target="_blank">Slack Legacy Tokens</a></p>
-  
   <form id="form">
-    <input type="text" id="token" placeholder="xoxp-your-slack-token" required>
-    <button type="submit">Connect</button>
+    <input type="text" id="token" placeholder="xoxp-your-slack-token" style="width: 100%; padding: 10px; margin: 10px 0;">
+    <button type="submit" style="width: 100%; padding: 12px; background: #007cba; color: white; border: none;">Connect</button>
   </form>
-  
-  <div id="status" class="status"></div>
-
+  <div id="status" style="margin: 10px 0; padding: 10px; display: none;"></div>
   <script>
     document.getElementById('form').addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -322,28 +217,25 @@ app.get('/connect', (req, res) => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ token })
         });
-        
         const data = await response.json();
         
+        status.style.display = 'block';
         if (data.success) {
-          status.className = 'status success';
-          status.textContent = '✅ Connected! Return to Claude to use tools.';
+          status.style.background = '#d4edda';
+          status.textContent = '✅ Connected! Return to Claude.';
         } else {
-          status.className = 'status error';
+          status.style.background = '#f8d7da';
           status.textContent = '❌ ' + data.error;
         }
-        status.style.display = 'block';
       } catch (error) {
-        status.className = 'status error';
-        status.textContent = '❌ Connection failed: ' + error.message;
         status.style.display = 'block';
+        status.style.background = '#f8d7da';
+        status.textContent = '❌ Error: ' + error.message;
       }
     });
   </script>
 </body>
-</html>`;
-  
-  res.send(html);
+</html>`);
 });
 
 // Register endpoint
@@ -365,13 +257,12 @@ app.post('/register', async (req, res) => {
     console.log('User registered:', auth.user);
     res.json({ success: true });
   } catch (error) {
-    console.error('Registration error:', error);
     res.json({ error: error.message });
   }
 });
 
-// Start server
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🚀 CLEAN SERVER v2.0.0 running on port ${PORT}`);
   console.log(`📱 Connect at: /connect`);
+  console.log(`🔗 MCP endpoint: /`);
 });
