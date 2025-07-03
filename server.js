@@ -125,110 +125,225 @@ app.get('/debug', (req, res) => {
   });
 });
 
-// Alternative: Claude Web function calling endpoint
-app.get('/api/functions', (req, res) => {
-  res.json({
-    functions: [
-      {
-        name: "slack_get_channels",
-        description: "List available Slack channels",
-        parameters: {
-          type: "object",
-          properties: {
-            limit: {
-              type: "number",
-              description: "Maximum number of channels to return",
-              default: 100
-            }
-          }
-        }
-      },
-      {
-        name: "slack_get_channel_history", 
-        description: "Get recent messages from a specific channel",
-        parameters: {
-          type: "object",
-          properties: {
-            channel: {
-              type: "string",
-              description: "Channel ID or name"
-            },
-            limit: {
-              type: "number", 
-              description: "Number of messages to retrieve",
-              default: 50
-            }
-          },
-          required: ["channel"]
-        }
-      },
-      {
-        name: "slack_send_message",
-        description: "Send a message to a Slack channel", 
-        parameters: {
-          type: "object",
-          properties: {
-            channel: {
-              type: "string",
-              description: "Channel ID or name"
-            },
-            text: {
-              type: "string",
-              description: "Message text to send"
-            }
-          },
-          required: ["channel", "text"]
-        }
-      }
-    ]
+// SSE endpoint for Claude Web MCP integration
+app.get('/sse', (req, res) => {
+  console.log('🔧 SSE endpoint called for MCP integration');
+  
+  // Set SSE headers
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Cache-Control'
+  });
+
+  // Send the endpoint URL for MCP messaging
+  const sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substring(7);
+  const messageEndpoint = `/messages/${sessionId}`;
+  
+  res.write(`event: endpoint\n`);
+  res.write(`data: ${messageEndpoint}\n\n`);
+  
+  console.log('🔧 SSE endpoint sent, message endpoint:', messageEndpoint);
+  
+  // Keep connection alive
+  const keepAlive = setInterval(() => {
+    res.write(`event: ping\n`);
+    res.write(`data: ${Date.now()}\n\n`);
+  }, 30000);
+  
+  req.on('close', () => {
+    console.log('🔧 SSE connection closed');
+    clearInterval(keepAlive);
   });
 });
 
-// Function calling endpoint
-app.post('/api/functions/:functionName', async (req, res) => {
-  const { functionName } = req.params;
-  const args = req.body;
+// MCP messaging endpoint for SSE
+app.post('/messages/:sessionId', async (req, res) => {
+  console.log('🔧 === MCP SSE MESSAGE ===');
+  console.log('🔧 Session ID:', req.params.sessionId);
+  console.log('🔧 Method:', req.body?.method);
+  console.log('🔧 Headers Authorization:', req.headers.authorization ? 'Present (' + req.headers.authorization.substring(0, 20) + '...)' : 'Missing');
+  console.log('🔧 Request body:', JSON.stringify(req.body, null, 2));
   
-  console.log('🔧 Function call:', functionName, 'Args:', args);
-  
-  const slackToken = await authenticateRequest(req);
-  if (!slackToken) {
-    return res.status(401).json({ 
-      error: 'Authentication required',
-      message: 'Please provide a valid Slack token in the Authorization header'
-    });
-  }
-  
-  const slackClient = new SlackClient(slackToken);
-  
+  const { method, params, id } = req.body || {};
+
   try {
-    let result;
-    switch (functionName) {
-      case 'slack_get_channels':
-        const channels = await slackClient.getChannels('public_channel,private_channel', args?.limit || 100);
-        result = `Found ${channels.channels.length} channels:\n\n` +
-                channels.channels.map(ch => `• #${ch.name} (${ch.id}) - ${ch.purpose?.value || 'No description'}`).join('\n');
-        break;
-        
-      case 'slack_get_channel_history':
-        const history = await slackClient.getChannelHistory(args.channel, args?.limit || 50);
-        result = `Recent messages in ${args.channel}:\n\n` +
-                history.messages.map(msg => `• ${msg.user}: ${msg.text}`).join('\n');
-        break;
-        
-      case 'slack_send_message':
-        const sendResult = await slackClient.sendMessage(args.channel, args.text);
-        result = `Message sent successfully to ${args.channel}! Message timestamp: ${sendResult.ts}`;
-        break;
-        
-      default:
-        return res.status(400).json({ error: `Unknown function: ${functionName}` });
+    // Handle initialize for SSE
+    if (method === 'initialize') {
+      console.log('🔧 SSE Initialize called');
+      const initResponse = { 
+        jsonrpc: '2.0',
+        result: {
+          protocolVersion: '2024-11-05', 
+          capabilities: { 
+            tools: {}
+          }, 
+          serverInfo: { 
+            name: 'slack-mcp-server', 
+            version: '1.0.0',
+            description: 'Slack MCP Server with 3 tools available'
+          }
+        },
+        id: id
+      };
+      console.log('🔧 SSE Initialize response:', JSON.stringify(initResponse, null, 2));
+      return res.json(initResponse);
     }
-    
-    res.json({ result });
+
+    if (method === 'notifications/initialized') {
+      console.log('🔧 SSE Notifications/initialized');
+      return res.status(200).send();
+    }
+
+    // Handle tools/list for SSE
+    if (method === 'tools/list') {
+      console.log('🎉 SSE TOOLS/LIST CALLED');
+      
+      const toolsResponse = { 
+        jsonrpc: '2.0',
+        result: {
+          tools: [
+            { 
+              name: 'slack_get_channels', 
+              description: 'List available Slack channels (requires authentication)', 
+              inputSchema: { 
+                type: 'object', 
+                properties: { 
+                  limit: { type: 'number', description: 'Maximum number of channels to return', default: 100 } 
+                } 
+              } 
+            },
+            { 
+              name: 'slack_get_channel_history', 
+              description: 'Get recent messages from a specific channel (requires authentication)', 
+              inputSchema: { 
+                type: 'object', 
+                properties: { 
+                  channel: { type: 'string', description: 'Channel ID or name' }, 
+                  limit: { type: 'number', description: 'Number of messages to retrieve', default: 50 } 
+                }, 
+                required: ['channel'] 
+              } 
+            },
+            { 
+              name: 'slack_send_message', 
+              description: 'Send a message to a Slack channel (requires authentication)', 
+              inputSchema: { 
+                type: 'object', 
+                properties: { 
+                  channel: { type: 'string', description: 'Channel ID or name' }, 
+                  text: { type: 'string', description: 'Message text to send' } 
+                }, 
+                required: ['channel', 'text'] 
+              } 
+            }
+          ]
+        },
+        id: id
+      };
+      console.log('🎉 SSE Tools list response:', JSON.stringify(toolsResponse, null, 2));
+      return res.json(toolsResponse);
+    }
+
+    // Handle tools/call for SSE
+    if (method === 'tools/call') {
+      const slackToken = await authenticateRequest(req);
+      if (!slackToken) {
+        console.log('❌ SSE Tools/call requires authentication');
+        return res.status(401).json({ 
+          jsonrpc: '2.0',
+          error: { 
+            code: -32001, 
+            message: 'Authentication required for tool calls. Please connect your Slack token first.',
+            data: {
+              authUrl: `https://${req.get('host')}/connect`,
+              instructions: 'Visit the connect URL to authenticate your Slack workspace'
+            }
+          },
+          id: id
+        });
+      }
+
+      const { name, arguments: args } = params;
+      console.log('🔧 SSE Tool call with auth:', name, 'Args:', args);
+      
+      const slackClient = new SlackClient(slackToken);
+      let toolResult;
+      
+      try {
+        switch (name) {
+          case 'slack_get_channels':
+            const channels = await slackClient.getChannels('public_channel,private_channel', args?.limit || 100);
+            toolResult = {
+              content: [{ 
+                type: 'text', 
+                text: `Found ${channels.channels.length} channels:\n\n` +
+                      channels.channels.map(ch => `• #${ch.name} (${ch.id}) - ${ch.purpose?.value || 'No description'}`).join('\n')
+              }]
+            };
+            break;
+            
+          case 'slack_get_channel_history':
+            const history = await slackClient.getChannelHistory(args.channel, args?.limit || 50);
+            toolResult = {
+              content: [{ 
+                type: 'text', 
+                text: `Recent messages in ${args.channel}:\n\n` +
+                      history.messages.map(msg => `• ${msg.user}: ${msg.text}`).join('\n')
+              }]
+            };
+            break;
+            
+          case 'slack_send_message':
+            const result = await slackClient.sendMessage(args.channel, args.text);
+            toolResult = {
+              content: [{ 
+                type: 'text', 
+                text: `Message sent successfully to ${args.channel}! Message timestamp: ${result.ts}`
+              }]
+            };
+            break;
+            
+          default:
+            toolResult = {
+              content: [{ type: 'text', text: `Unknown tool: ${name}` }],
+              isError: true
+            };
+        }
+      } catch (error) {
+        console.error('SSE Tool execution error:', error);
+        toolResult = {
+          content: [{ type: 'text', text: `Error executing ${name}: ${error.message}` }],
+          isError: true
+        };
+      }
+      
+      const callResponse = {
+        jsonrpc: '2.0',
+        result: toolResult,
+        id: id
+      };
+      console.log('🔧 SSE Tool call completed:', name);
+      return res.json(callResponse);
+    }
+
+    // Handle other methods
+    console.log('❌ SSE Unknown method:', method);
+    return res.status(400).json({ 
+      jsonrpc: '2.0',
+      error: { code: -32601, message: `Unknown method: ${method}` },
+      id: id
+    });
+
   } catch (error) {
-    console.error('Function execution error:', error);
-    res.status(500).json({ error: error.message });
+    console.error('❌ SSE MCP Error:', error);
+    return res.status(500).json({ 
+      jsonrpc: '2.0',
+      error: { code: -32603, message: error.message },
+      id: id
+    });
   }
 });
 
