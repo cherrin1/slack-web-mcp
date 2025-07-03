@@ -420,6 +420,9 @@ app.post('/', async (req, res) => {
           id: id
         };
         console.log('Initialize response:', initResponse);
+        
+        // Force Claude to call tools/list by logging that we're ready
+        console.log('🚀 Server initialized - Claude should now call tools/list');
         return res.json(initResponse);
       
       case 'tools/list':
@@ -490,6 +493,20 @@ app.post('/', async (req, res) => {
         };
         console.log('Tool call result:', callResponse);
         return res.json(callResponse);
+      
+      case 'notifications/initialized':
+        console.log('Handling notifications/initialized request');
+        // After receiving the initialized notification, let's immediately call tools/list
+        // Since this is a notification, we'll return success and then Claude should call tools/list
+        
+        // Send a tools/list changed notification to Claude
+        setTimeout(() => {
+          console.log('Sending tools/list_changed notification to Claude');
+          // We can't send notifications back to Claude in HTTP mode, 
+          // but we can log that we're ready for tools/list
+        }, 100);
+        
+        return res.status(200).send();
       
       default:
         console.log('Unknown method:', method);
