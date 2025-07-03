@@ -480,7 +480,7 @@ app.post('/token', (req, res) => {
   res.json(tokenResponse);
 });
 
-// MCP Protocol - FIXED: Allow tools discovery without authentication
+// MCP Protocol - SIMPLIFIED: Focus on tools/list as primary entry point
 app.post('/', async (req, res) => {
   console.log('🔧 === MCP REQUEST ===');
   console.log('🔧 Method:', req.body?.method);
@@ -492,36 +492,7 @@ app.post('/', async (req, res) => {
   const { method, params, id } = req.body || {};
 
   try {
-    // Initialize - always return tools capability
-    if (method === 'initialize') {
-      console.log('🔧 Initialize - returning tools capability');
-      const initResponse = { 
-        jsonrpc: '2.0',
-        result: {
-          protocolVersion: '2024-11-05', 
-          capabilities: { 
-            tools: {
-              listChanged: true
-            }
-          }, 
-          serverInfo: { 
-            name: 'slack-mcp-server', 
-            version: '1.0.0',
-            description: 'Slack MCP Server - Connect your Slack workspace to Claude'
-          }
-        },
-        id: id
-      };
-      console.log('🔧 Initialize response:', JSON.stringify(initResponse, null, 2));
-      return res.json(initResponse);
-    }
-
-    if (method === 'notifications/initialized') {
-      console.log('🔧 Notifications/initialized - server ready');
-      return res.status(200).send();
-    }
-
-    // FIXED: ALWAYS return tools list without authentication check
+    // PRIORITIZE tools/list - handle it first
     if (method === 'tools/list') {
       console.log('🎉 TOOLS/LIST CALLED - returning tools WITHOUT authentication');
       
@@ -569,6 +540,32 @@ app.post('/', async (req, res) => {
       };
       console.log('🎉 Tools list response:', JSON.stringify(toolsResponse, null, 2));
       return res.json(toolsResponse);
+    }
+
+    // Simplified initialize - just return basic capabilities
+    if (method === 'initialize') {
+      console.log('🔧 Initialize called with params:', JSON.stringify(params, null, 2));
+      const initResponse = { 
+        jsonrpc: '2.0',
+        result: {
+          protocolVersion: '2024-11-05', 
+          capabilities: { 
+            tools: {}
+          }, 
+          serverInfo: { 
+            name: 'slack-mcp-server', 
+            version: '1.0.0'
+          }
+        },
+        id: id
+      };
+      console.log('🔧 Initialize response:', JSON.stringify(initResponse, null, 2));
+      return res.json(initResponse);
+    }
+
+    if (method === 'notifications/initialized') {
+      console.log('🔧 Notifications/initialized - server ready');
+      return res.status(200).send();
     }
 
     // REQUIRE authentication ONLY for tools/call
