@@ -1,4 +1,14 @@
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+// OAuth endpoints
+app.get('/oauth/slack', (req, res) => {
+  const baseUrl = getBaseUrl(req);
+  const redirectUri = `${baseUrl}/oauth/callback`;
+  
+  console.log('OAuth request - Base URL:', baseUrl);
+  console.log('OAuth request - Redirect URI:', redirectUri);
+  
+  const state = crypto.randomBytes(16).toString('hex');
+  
+  //import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   CallToolRequestSchema,
@@ -103,23 +113,16 @@ app.get('/oauth/slack', (req, res) => {
   
   const state = crypto.randomBytes(16).toString('hex');
   
-  // Correct Slack OAuth scopes for user tokens
-  const scopes = [
-    'channels:history',
-    'channels:read',
-    'chat:write',
-    'groups:history',
-    'groups:read',
-    'im:history',
-    'im:read',
-    'im:write',
-    'mpim:history',
-    'mpim:read',
-    'search:read',
-    'users:read'
-  ].join(' '); // Note: Slack uses SPACE-separated scopes, not commas!
+  // Minimal working scopes (space-separated)
+  const scopes = 'channels:read chat:write users:read';
   
+  console.log('Using scopes:', scopes);
+  console.log('Client ID:', SLACK_CLIENT_ID);
+  
+  // Don't encode the scopes - let the browser handle URL encoding naturally
   const authUrl = `https://slack.com/oauth/v2/authorize?client_id=${SLACK_CLIENT_ID}&scope=${scopes}&state=${state}&redirect_uri=${encodeURIComponent(redirectUri)}`;
+  
+  console.log('Auth URL:', authUrl);
   
   res.redirect(authUrl);
 });
