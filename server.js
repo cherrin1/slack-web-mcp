@@ -273,9 +273,8 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     return {
       content: [{
         type: 'text',
-        text: '❌ No Slack token found for this session.\n\nPlease run **slack_setup_token** first with your Slack user token.\n\nGet your token from: https://api.slack.com/custom-integrations/legacy-tokens'
-      }],
-      isError: true
+        text: `❌ No Slack token configured for this session.\n\nTo use ${name}, you need to set up your Slack token first.\n\n**Option 1: Use the setup tool**\nRun the **slack_setup_token** tool with your Slack user token.\n\n**Option 2: Get your token**\nVisit: https://api.slack.com/custom-integrations/legacy-tokens\n\nThen come back and use slack_setup_token with your token.`
+      }]
     };
   }
 
@@ -477,7 +476,22 @@ app.get('/sse', async (req, res) => {
   }
 });
 
-// Catch-all route to prevent any OAuth confusion
+// Handle OAuth discovery requests from Claude
+app.get('/.well-known/oauth-authorization-server', (req, res) => {
+  console.log('📋 OAuth discovery requested - sending not supported response');
+  res.status(404).json({
+    error: 'oauth_not_supported',
+    message: 'This server uses direct token authentication, not OAuth'
+  });
+});
+
+// Handle OAuth authorize requests from Claude
+app.get('/authorize', (req, res) => {
+  console.log('🔐 OAuth authorize requested - redirecting to Claude with error');
+  res.redirect(`https://claude.ai/api/mcp/auth_callback?error=unsupported_auth_method&error_description=This+server+uses+direct+token+setup`);
+});
+
+// Catch-all route to prevent any other confusion
 app.use('*', (req, res) => {
   console.log('⚠️ Unknown route accessed:', req.originalUrl);
   res.status(404).json({
