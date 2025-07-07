@@ -346,6 +346,11 @@ app.post('/', express.json(), async (req, res) => {
     console.log('MCP Method:', method);
     
     switch (method) {
+      case 'notifications/initialized':
+        console.log('Notifications initialized - sending empty response');
+        // For notification methods, we should return 200 with no response body
+        return res.status(200).end();
+        
       case 'tools/list':
         console.log('Returning tools list');
         return res.json({
