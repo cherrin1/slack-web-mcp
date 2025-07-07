@@ -469,20 +469,11 @@ app.get('/sse', async (req, res) => {
   console.log('🔄 SSE MCP connection received from:', req.get('User-Agent') || 'unknown');
   console.log('🔍 Request headers:', req.headers);
   
-  // Set SSE headers immediately
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Cache-Control',
-  });
-  
   // Generate session ID
   const sessionId = `sess_${Date.now()}_${Math.random().toString(36).substring(7)}`;
   
   try {
-    // Create SSE transport with proper error handling
+    // Create SSE transport - let it handle headers
     console.log('🚀 Creating SSE transport for session:', sessionId);
     const transport = new SSEServerTransport('/messages', res);
     
@@ -502,9 +493,6 @@ app.get('/sse', async (req, res) => {
     
     console.log('✅ MCP SSE connection established:', sessionId);
     
-    // Send initial connection event
-    res.write(`event: connected\ndata: ${JSON.stringify({ sessionId, status: 'connected' })}\n\n`);
-    
     // Handle disconnection
     req.on('close', () => {
       console.log('🔌 SSE connection closed:', sessionId);
@@ -522,23 +510,16 @@ app.get('/sse', async (req, res) => {
       sessionTokens.delete(sessionId);
     });
     
-    // Keep connection alive
-    const keepAlive = setInterval(() => {
-      if (activeSessions.has(sessionId)) {
-        res.write(`: keepalive ${Date.now()}\n\n`);
-      } else {
-        clearInterval(keepAlive);
-      }
-    }, 30000);
-    
   } catch (error) {
     console.error('❌ SSE setup error:', error);
-    res.writeHead(500, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ 
-      error: 'Failed to establish MCP connection',
-      message: error.message,
-      sessionId: sessionId
-    }));
+    // Only send error response if headers haven't been sent
+    if (!res.headersSent) {
+      res.status(500).json({ 
+        error: 'Failed to establish MCP connection',
+        message: error.message,
+        sessionId: sessionId
+      });
+    }
   }
 });
 
