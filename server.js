@@ -280,9 +280,22 @@ app.post('/', express.json(), async (req, res) => {
   
   const authHeader = req.headers.authorization;
   
-  // For initialize requests, we might not have auth yet
+  // For initialize requests without auth, we need to reject them to force OAuth
+  if (req.body.method === 'initialize' && (!authHeader || !authHeader.startsWith('Bearer '))) {
+    console.log('Initialize request without auth - rejecting to force OAuth');
+    return res.status(401).json({
+      jsonrpc: "2.0",
+      id: req.body.id,
+      error: {
+        code: -32600,
+        message: 'Authentication required. Please complete OAuth flow first.'
+      }
+    });
+  }
+  
+  // For initialize requests with auth, proceed normally
   if (req.body.method === 'initialize') {
-    console.log('Initialize request - no auth required');
+    console.log('Initialize request with auth - proceeding');
     return res.json({
       jsonrpc: "2.0",
       id: req.body.id,
