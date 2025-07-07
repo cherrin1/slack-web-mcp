@@ -105,7 +105,7 @@ class SlackClient {
 
 // OAuth helper function
 async function exchangeCodeForToken(code) {
-  if (!SLACK_CLIENT_SECRET || SLACK_CLIENT_SECRET === 'not-configured') {
+  if (!SLACK_CLIENT_SECRET || SLACK_CLIENT_SECRET === 'dummy-secret-for-manual-auth') {
     throw new Error('OAuth not properly configured - use manual token method instead');
   }
 
@@ -118,7 +118,7 @@ async function exchangeCodeForToken(code) {
       client_id: SLACK_CLIENT_ID,
       client_secret: SLACK_CLIENT_SECRET,
       code: code,
-      redirect_uri: REDIRECT_URI,
+      // Note: redirect_uri will be set dynamically in the request handler
     }),
   });
 
@@ -311,7 +311,8 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
 
   // Handle auth URL request
   if (name === 'slack_get_auth_url') {
-    const authUrl = `${SERVER_URL}/auth?session=${sessionId}`;
+    const serverUrl = `https://${req.get('host')}`;
+    const authUrl = `${serverUrl}/auth?session=${sessionId}`;
     
     return {
       content: [{
@@ -465,11 +466,12 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
 // OAuth discovery endpoint for Claude
 app.get('/.well-known/oauth-authorization-server', (req, res) => {
   console.log('📋 OAuth discovery requested');
+  const serverUrl = `https://${req.get('host')}`;
   
   res.json({
-    issuer: SERVER_URL,
-    authorization_endpoint: `${SERVER_URL}/authorize`,
-    token_endpoint: `${SERVER_URL}/token`,
+    issuer: serverUrl,
+    authorization_endpoint: `${serverUrl}/authorize`,
+    token_endpoint: `${serverUrl}/token`,
     response_types_supported: ['code'],
     grant_types_supported: ['authorization_code'],
     code_challenge_methods_supported: ['S256'],
@@ -927,8 +929,8 @@ app.get('/', (req, res) => {
       oauth_discovery: "/.well-known/oauth-authorization-server"
     },
     instructions: [
-      "1. Add this server to Claude: " + (process.env.WEBSITE_HOSTNAME ? `https://${process.env.WEBSITE_HOSTNAME}/sse` : "your-domain.com/sse"),
-      "2. Authenticate via OAuth popup or use slack_setup_token tool",
+      "1. Add this server to Claude with /sse endpoint",
+      "2. Authenticate via OAuth popup or use slack_setup_token tool", 
       "3. Get token from: https://api.slack.com/custom-integrations/legacy-tokens"
     ]
   });
