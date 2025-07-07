@@ -104,7 +104,7 @@ class SlackClient {
 }
 
 // OAuth helper function
-async function exchangeCodeForToken(code) {
+async function exchangeCodeForToken(code, redirectUri) {
   if (!SLACK_CLIENT_SECRET || SLACK_CLIENT_SECRET === 'dummy-secret-for-manual-auth') {
     throw new Error('OAuth not properly configured - use manual token method instead');
   }
@@ -118,7 +118,7 @@ async function exchangeCodeForToken(code) {
       client_id: SLACK_CLIENT_ID,
       client_secret: SLACK_CLIENT_SECRET,
       code: code,
-      // Note: redirect_uri will be set dynamically in the request handler
+      redirect_uri: redirectUri,
     }),
   });
 
@@ -667,7 +667,7 @@ app.post('/token', async (req, res) => {
       // Generate a temporary code for Claude
       const tempCode = `manual_${Date.now()}_${Math.random().toString(36).substring(7)}`;
       
-      // Store token with temp code
+      // Store token with temp code for Claude to exchange
       sessionTokens.set(tempCode, slackToken);
       
       console.log('✅ Manual token authenticated:', authTest.user);
@@ -679,7 +679,7 @@ app.post('/token', async (req, res) => {
         team: authTest.team
       });
     } else if (code && grant_type === 'authorization_code') {
-      // OAuth authorization code flow
+      // OAuth authorization code flow from Claude
       
       // Check if this is a manual token code
       if (code.startsWith('manual_')) {
@@ -691,13 +691,15 @@ app.post('/token', async (req, res) => {
           });
         }
         
-        const slackClient = new SlackClient(slackToken);
-        authTest = await slackClient.testAuth();
+        // Don't delete the token yet - Claude needs it for the session
+        console.log('✅ Manual auth code exchanged for token');
         
-        console.log('✅ Manual auth code exchanged for token:', authTest.user);
+        // Store token with a session-based key for MCP
+        const sessionKey = `session_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+        sessionTokens.set(sessionKey, slackToken);
         
         return res.json({ 
-          access_token: slackToken,
+          access_token: sessionKey, // Use session key as access token
           token_type: 'Bearer',
           scope: 'claudeai',
           expires_in: 3600
@@ -707,14 +709,19 @@ app.post('/token', async (req, res) => {
       // Try real OAuth if configured
       if (SLACK_CLIENT_SECRET !== 'dummy-secret-for-manual-auth') {
         try {
-          slackToken = await exchangeCodeForToken(code);
+          const serverUrl = `https://${req.get('host')}`;
+          slackToken = await exchangeCodeForToken(code, `${serverUrl}/authorize`);
           const slackClient = new SlackClient(slackToken);
           authTest = await slackClient.testAuth();
           
           console.log('✅ OAuth token exchanged:', authTest.user);
           
+          // Store token with a session-based key for MCP
+          const sessionKey = `session_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+          sessionTokens.set(sessionKey, slackToken);
+          
           return res.json({ 
-            access_token: slackToken,
+            access_token: sessionKey, // Use session key as access token
             token_type: 'Bearer',
             scope: 'claudeai',
             expires_in: 3600
