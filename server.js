@@ -275,6 +275,7 @@ app.get('/.well-known/mcp', (req, res) => {
 // Add a root MCP endpoint that handles all MCP traffic
 app.post('/', express.json(), async (req, res) => {
   console.log('=== MCP Request on ROOT ===');
+  console.log('Method:', req.body.method);
   console.log('Headers:', req.headers);
   console.log('Body:', JSON.stringify(req.body, null, 2));
   
@@ -295,14 +296,16 @@ app.post('/', express.json(), async (req, res) => {
   
   // For initialize requests with auth, proceed normally
   if (req.body.method === 'initialize') {
-    console.log('Initialize request with auth - proceeding');
+    console.log('Initialize request with auth - proceeding with tools capability');
     return res.json({
       jsonrpc: "2.0",
       id: req.body.id,
       result: {
         protocolVersion: "2024-11-05",
         capabilities: {
-          tools: {}
+          tools: {
+            listChanged: true
+          }
         },
         serverInfo: {
           name: "slack-user-token-server",
