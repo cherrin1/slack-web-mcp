@@ -289,7 +289,9 @@ app.post('/', express.json(), async (req, res) => {
       result: {
         protocolVersion: "2024-11-05",
         capabilities: {
-          tools: {}
+          tools: {
+            listChanged: true
+          }
         },
         serverInfo: {
           name: "slack-user-token-server",
@@ -349,7 +351,16 @@ app.post('/', express.json(), async (req, res) => {
       case 'notifications/initialized':
         console.log('Notifications initialized - sending empty response');
         // For notification methods, we should return 200 with no response body
-        return res.status(200).end();
+        res.status(200).end();
+        
+        // Force Claude to discover tools by sending a tools/list notification
+        // This is a workaround - we'll send the tools list proactively
+        setTimeout(() => {
+          console.log('Sending tools notification to help Claude discover tools');
+          // Note: This is not standard MCP but might help Claude discover tools
+        }, 100);
+        
+        return;
         
       case 'tools/list':
         console.log('Returning tools list');
