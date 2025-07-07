@@ -9,10 +9,11 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// OAuth configuration - set these in Azure environment variables or use defaults
+// OAuth configuration - Claude Web expects specific values
 const SLACK_CLIENT_ID = process.env.SLACK_CLIENT_ID || 'slack-mcp-claude-web';
-const SLACK_CLIENT_SECRET = process.env.SLACK_CLIENT_SECRET || 'not-configured';
-const REDIRECT_URI = process.env.REDIRECT_URI || `https://${process.env.WEBSITE_HOSTNAME || 'your-domain.com'}/authorize`;
+const SLACK_CLIENT_SECRET = process.env.SLACK_CLIENT_SECRET || 'dummy-secret-for-manual-auth';
+const SERVER_URL = process.env.WEBSITE_HOSTNAME ? `https://${process.env.WEBSITE_HOSTNAME}` : `https://slack-mcp-0000032.purplepebble-32448054.westus2.azurecontainerapps.io`;
+const REDIRECT_URI = `${SERVER_URL}/authorize`;
 
 // Enhanced CORS for Claude
 app.use(cors({
@@ -465,16 +466,17 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
 // OAuth discovery endpoint for Claude
 app.get('/.well-known/oauth-authorization-server', (req, res) => {
   console.log('📋 OAuth discovery requested');
-  const serverUrl = `https://${req.get('host')}`;
   
   res.json({
-    issuer: serverUrl,
-    authorization_endpoint: `${serverUrl}/authorize`,
-    token_endpoint: `${serverUrl}/token`,
+    issuer: SERVER_URL,
+    authorization_endpoint: `${SERVER_URL}/authorize`,
+    token_endpoint: `${SERVER_URL}/token`,
     response_types_supported: ['code'],
     grant_types_supported: ['authorization_code'],
     code_challenge_methods_supported: ['S256'],
-    scopes_supported: ['claudeai']
+    scopes_supported: ['claudeai'],
+    client_id: SLACK_CLIENT_ID,
+    token_endpoint_auth_methods_supported: ['client_secret_post', 'none']
   });
 });
 
@@ -629,20 +631,31 @@ app.get('/authorize', async (req, res) => {
 
 // OAuth token endpoint
 app.post('/token', async (req, res) => {
-  const { code, state, token } = req.body;
+  const { code, grant_type, client_id, code_verifier, token, state } = req.body;
   
-  console.log('🎟️ Token request:', { hasCode: !!code, hasToken: !!token, state });
+  console.log('🎟️ Token request:', { 
+    hasCode: !!code, 
+    hasToken: !!token, 
+    grant_type, 
+    client_id,
+    state 
+  });
+  
+  // Set CORS headers for token endpoint
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   
   try {
     let slackToken;
     let authTest;
     
     if (token) {
-      // Manual token flow
+      // Manual token flow from auth page
       if (!token.startsWith('xoxp-')) {
         return res.status(400).json({ 
-          success: false,
-          error: 'Invalid token format' 
+          error: 'invalid_token',
+          error_description: 'Invalid token format' 
         });
       }
       
@@ -664,38 +677,69 @@ app.post('/token', async (req, res) => {
         user: authTest.user,
         team: authTest.team
       });
-    } else if (code) {
-      // OAuth code flow (if properly configured)
-      try {
-        slackToken = await exchangeCodeForToken(code);
+    } else if (code && grant_type === 'authorization_code') {
+      // OAuth authorization code flow
+      
+      // Check if this is a manual token code
+      if (code.startsWith('manual_')) {
+        slackToken = sessionTokens.get(code);
+        if (!slackToken) {
+          return res.status(400).json({ 
+            error: 'invalid_grant',
+            error_description: 'Authorization code expired or invalid' 
+          });
+        }
+        
         const slackClient = new SlackClient(slackToken);
         authTest = await slackClient.testAuth();
         
-        console.log('✅ OAuth token exchanged:', authTest.user);
+        console.log('✅ Manual auth code exchanged for token:', authTest.user);
         
         return res.json({ 
           access_token: slackToken,
           token_type: 'Bearer',
-          scope: 'claudeai'
-        });
-      } catch (error) {
-        return res.status(400).json({ 
-          success: false,
-          error: 'OAuth not configured - use manual token method' 
+          scope: 'claudeai',
+          expires_in: 3600
         });
       }
+      
+      // Try real OAuth if configured
+      if (SLACK_CLIENT_SECRET !== 'dummy-secret-for-manual-auth') {
+        try {
+          slackToken = await exchangeCodeForToken(code);
+          const slackClient = new SlackClient(slackToken);
+          authTest = await slackClient.testAuth();
+          
+          console.log('✅ OAuth token exchanged:', authTest.user);
+          
+          return res.json({ 
+            access_token: slackToken,
+            token_type: 'Bearer',
+            scope: 'claudeai',
+            expires_in: 3600
+          });
+        } catch (error) {
+          console.error('OAuth exchange failed:', error.message);
+        }
+      }
+      
+      // Fallback error
+      return res.status(400).json({ 
+        error: 'invalid_grant',
+        error_description: 'Authorization code invalid or OAuth not configured' 
+      });
     }
     
     return res.status(400).json({ 
-      success: false,
-      error: 'No token or code provided' 
+      error: 'unsupported_grant_type',
+      error_description: 'Grant type not supported' 
     });
     
   } catch (error) {
-    console.error('❌ Token validation failed:', error.message);
+    console.error('❌ Token endpoint error:', error.message);
     return res.status(400).json({ 
-      success: false,
-      error: error.message 
+      error: 'server_error',
+      error_description: error.message 
     });
   }
 });
@@ -860,6 +904,14 @@ app.post('/manual-auth', async (req, res) => {
       message: error.message 
     });
   }
+});
+
+// Handle OPTIONS requests for CORS
+app.options('/token', (req, res) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.sendStatus(200);
 });
 
 // Server info endpoint
