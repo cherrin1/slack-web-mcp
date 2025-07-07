@@ -26,6 +26,38 @@ const activeSessions = new Map(); // sessionId -> session info
 const oauthClients = new Map(); // clientId -> client info
 const authorizationCodes = new Map(); // code -> token info
 
+// Pre-register common client IDs that Claude might use
+const preRegisteredClients = [
+  {
+    client_id: 'slack-mcp-claude-web',
+    client_secret: null, // Public client
+    client_name: 'Claude Web Client',
+    redirect_uris: ['https://claude.ai/api/mcp/auth_callback'],
+    grant_types: ['authorization_code', 'refresh_token'],
+    response_types: ['code'],
+    scope: 'mcp'
+  },
+  {
+    client_id: 'claude-mcp-client',
+    client_secret: null,
+    client_name: 'Claude MCP Client',
+    redirect_uris: ['https://claude.ai/api/mcp/auth_callback'],
+    grant_types: ['authorization_code', 'refresh_token'],
+    response_types: ['code'],
+    scope: 'mcp'
+  }
+];
+
+// Register pre-defined clients
+preRegisteredClients.forEach(client => {
+  oauthClients.set(client.client_id, {
+    ...client,
+    created_at: new Date().toISOString()
+  });
+});
+
+console.log('🔐 Pre-registered OAuth clients:', preRegisteredClients.map(c => c.client_id));
+
 // Enhanced SlackClient
 class SlackClient {
   constructor(token) {
@@ -277,7 +309,7 @@ app.get('/oauth/authorize', (req, res) => {
 app.post('/oauth/token', (req, res) => {
   console.log('🔐 OAuth token request:', req.body);
   
-  const { grant_type, code, client_id, client_secret, redirect_uri } = req.body;
+  const { grant_type, code, client_id, client_secret, redirect_uri, code_verifier } = req.body;
   
   if (grant_type !== 'authorization_code') {
     return res.status(400).json({
@@ -288,52 +320,7 @@ app.post('/oauth/token', (req, res) => {
   
   const codeInfo = authorizationCodes.get(code);
   if (!codeInfo) {
-    return res.status(400).json({
-      error: 'invalid_grant',
-      error_description: 'Invalid authorization code'
-    });
-  }
-  
-  // Check if code is expired
-  if (new Date() > codeInfo.expires_at) {
-    authorizationCodes.delete(code);
-    return res.status(400).json({
-      error: 'invalid_grant',
-      error_description: 'Authorization code expired'
-    });
-  }
-  
-  // Validate client
-  const client = oauthClients.get(client_id);
-  if (!client || (client.client_secret && client.client_secret !== client_secret)) {
-    return res.status(400).json({
-      error: 'invalid_client',
-      error_description: 'Invalid client credentials'
-    });
-  }
-  
-  // Generate access token
-  const accessToken = `mcp_access_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-  
-  // Store access token with user info
-  if (codeInfo.user_token && registeredTokens.has(codeInfo.user_token)) {
-    const userInfo = registeredTokens.get(codeInfo.user_token);
-    if (!userInfo.accessTokens) userInfo.accessTokens = [];
-    userInfo.accessTokens.push(accessToken);
-  }
-  
-  // Clean up authorization code
-  authorizationCodes.delete(code);
-  
-  console.log('✅ OAuth access token issued:', accessToken.substring(0, 20) + '...');
-  
-  res.json({
-    access_token: accessToken,
-    token_type: 'Bearer',
-    expires_in: 3600,
-    scope: codeInfo.scope || 'mcp'
-  });
-});
+    console.log('❌ Authorization code not found:',
 
 // Server info endpoint
 app.get('/', (req, res) => {
@@ -1199,5 +1186,7 @@ app.listen(PORT, () => {
   console.log(`📱 Connect at: https://your-domain.com/connect`);
   console.log(`🔗 MCP endpoint: https://your-domain.com/mcp`);
   console.log(`🔐 OAuth discovery: https://your-domain.com/.well-known/oauth-authorization-server`);
+  console.log(`🔐 Pre-registered OAuth clients:`, Array.from(oauthClients.keys()));
   console.log(`📊 Ready for Claude integration`);
+  console.log(`💡 Use client_id: 'slack-mcp-claude-web' when adding to Claude`);
 });
