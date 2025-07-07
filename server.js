@@ -509,6 +509,9 @@ app.all('/token', (req, res) => {
   res.redirect(307, '/sse');
 });
 
+// Store active transports to handle messages properly
+const activeTransports = new Map(); // sessionId -> transport
+
 // SSE endpoint for MCP connections
 app.get('/sse', async (req, res) => {
   console.log('🔄 SSE MCP connection received from:', req.get('User-Agent') || 'unknown');
@@ -518,17 +521,19 @@ app.get('/sse', async (req, res) => {
   const sessionId = `sess_${Date.now()}_${Math.random().toString(36).substring(7)}`;
   
   try {
-    // Create SSE transport - let it handle headers
+    // Create SSE transport with the correct message endpoint
     console.log('🚀 Creating SSE transport for session:', sessionId);
     const transport = new SSEServerTransport('/messages', res);
     
-    // Store session info
+    // Store both session info and transport
     activeSessions.set(sessionId, {
       id: sessionId,
       transport: transport,
       startTime: new Date(),
       connected: true
     });
+    
+    activeTransports.set(sessionId, transport);
     
     // Connect MCP server to this transport with session context
     console.log('🔗 Connecting MCP server to transport...');
@@ -546,12 +551,14 @@ app.get('/sse', async (req, res) => {
         session.connected = false;
       }
       activeSessions.delete(sessionId);
+      activeTransports.delete(sessionId);
       sessionTokens.delete(sessionId);
     });
     
     req.on('error', (error) => {
       console.error('❌ SSE connection error:', sessionId, error.message);
       activeSessions.delete(sessionId);
+      activeTransports.delete(sessionId);
       sessionTokens.delete(sessionId);
     });
     
@@ -568,38 +575,17 @@ app.get('/sse', async (req, res) => {
   }
 });
 
-// Handle POST requests to /messages (required for SSE transport)
-app.post('/messages', (req, res) => {
-  console.log('📨 POST to /messages received:', req.body);
-  console.log('📋 Headers:', req.headers);
-  
-  // The SSE transport should handle this, but Claude is trying to POST here
-  // This might be for sending messages back to the server
-  
-  try {
-    // Find the session based on some identifier
-    // For now, just acknowledge the message
-    res.json({
-      success: true,
-      message: 'Message received',
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    console.error('❌ Message handling error:', error);
-    res.status(500).json({
-      error: 'Message handling failed',
-      message: error.message
-    });
-  }
-});
+// Remove the POST /messages handler - let SSE transport handle it naturally
+// The SSEServerTransport should automatically handle POST requests to /messages
 
 // Also handle GET requests to /messages
 app.get('/messages', (req, res) => {
   console.log('📬 GET to /messages received');
   res.json({
     endpoint: '/messages',
-    method: 'POST', 
-    description: 'Endpoint for MCP message handling'
+    description: 'MCP message endpoint handled by SSE transport',
+    activeSessions: activeSessions.size,
+    activeTransports: activeTransports.size
   });
 });
 
