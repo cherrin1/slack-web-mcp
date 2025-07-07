@@ -410,19 +410,19 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
   }
 });
 
-// Server info endpoint
+// ONLY essential endpoints - NO OAuth routes
 app.get('/', (req, res) => {
   res.json({
     name: "Slack MCP Server",
     version: "1.0.0",
-    description: "Connect your Slack workspace to Claude via MCP - No pre-registration required!",
+    description: "Connect your Slack workspace to Claude via MCP",
     status: "ready",
     endpoints: {
       sse: "/sse",
       health: "/health"
     },
     instructions: [
-      "1. Add this server to Claude: npx -y mcp-remote https://your-domain.com/sse",
+      "1. Add this server to Claude: your-domain.com/sse",
       "2. Use 'slack_setup_token' tool with your Slack token",
       "3. Get token from: https://api.slack.com/custom-integrations/legacy-tokens"
     ]
@@ -439,79 +439,9 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Simple info page
-app.get('/info', (req, res) => {
-  const serverUrl = `https://${req.get('host')}`;
-  
-  const html = `<!DOCTYPE html>
-<html>
-<head>
-    <title>Slack MCP Server</title>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            margin: 0; padding: 20px; min-height: 100vh; display: flex; align-items: center; justify-content: center;
-        }
-        .container { 
-            background: white; padding: 40px; border-radius: 16px; 
-            box-shadow: 0 20px 40px rgba(0,0,0,0.1); max-width: 600px; width: 100%;
-        }
-        h1 { color: #2d3748; margin-bottom: 8px; font-size: 28px; text-align: center; }
-        .subtitle { color: #718096; text-align: center; margin-bottom: 32px; }
-        .step { margin-bottom: 24px; }
-        .step-number { 
-            display: inline-block; width: 24px; height: 24px; 
-            background: #667eea; color: white; border-radius: 50%; 
-            text-align: center; line-height: 24px; font-size: 14px; font-weight: 600;
-            margin-right: 8px;
-        }
-        .code-box { 
-            background: #1a202c; color: #e2e8f0; padding: 12px; border-radius: 6px; 
-            font-family: 'Monaco', 'Consolas', monospace; font-size: 14px; 
-            word-break: break-all; margin: 8px 0; user-select: all;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>🚀 Slack MCP Server</h1>
-        <p class="subtitle">Ready for Claude integration</p>
-        
-        <div class="step">
-            <div><span class="step-number">1</span><strong>Add to Claude Web</strong></div>
-            <p>In Claude web settings, add this MCP server URL:</p>
-            <div class="code-box">${serverUrl}/sse</div>
-        </div>
-
-        <div class="step">
-            <div><span class="step-number">2</span><strong>Setup Your Token</strong></div>
-            <p>In Claude, use the <code>slack_setup_token</code> tool with your Slack token.</p>
-            <p><strong>Get your token:</strong> <a href="https://api.slack.com/custom-integrations/legacy-tokens" target="_blank">Slack Legacy Tokens</a></p>
-        </div>
-
-        <div class="step">
-            <div><span class="step-number">3</span><strong>Start Using Slack Tools</strong></div>
-            <p>Available tools:</p>
-            <ul>
-                <li><code>slack_get_channels</code> - List channels</li>
-                <li><code>slack_send_message</code> - Send messages</li>
-                <li><code>slack_get_channel_history</code> - Read messages</li>
-                <li><code>slack_get_users</code> - List users</li>
-            </ul>
-        </div>
-    </div>
-</body>
-</html>`;
-  
-  res.send(html);
-});
-
 // SSE endpoint for MCP connections
 app.get('/sse', async (req, res) => {
-  console.log('🔄 SSE MCP connection received');
+  console.log('🔄 SSE MCP connection received from:', req.get('User-Agent') || 'unknown');
   
   // Generate session ID
   const sessionId = `sess_${Date.now()}_${Math.random().toString(36).substring(7)}`;
@@ -547,10 +477,20 @@ app.get('/sse', async (req, res) => {
   }
 });
 
+// Catch-all route to prevent any OAuth confusion
+app.use('*', (req, res) => {
+  console.log('⚠️ Unknown route accessed:', req.originalUrl);
+  res.status(404).json({
+    error: 'Route not found',
+    message: 'This is a Slack MCP Server. Use /sse endpoint for MCP connections.',
+    availableEndpoints: ['/', '/health', '/sse']
+  });
+});
+
 // Start server
 app.listen(PORT, () => {
   console.log(`🚀 Slack MCP Server running on port ${PORT}`);
-  console.log(`🔗 SSE endpoint: https://your-domain.com/sse`);
-  console.log(`💡 Use with: npx -y mcp-remote https://your-domain.com/sse`);
-  console.log(`📊 No pre-registration required - users set up tokens via slack_setup_token tool`);
+  console.log(`🔗 SSE endpoint: /sse`);
+  console.log(`💡 Ready for Claude integration`);
+  console.log(`📊 No OAuth routes - clean MCP server only`);
 });
