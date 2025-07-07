@@ -272,23 +272,54 @@ app.get('/.well-known/mcp', (req, res) => {
   });
 });
 
-// MCP endpoint for Claude to connect to
-app.post('/mcp', express.json(), async (req, res) => {
+// Add a root MCP endpoint that handles all MCP traffic
+app.post('/', express.json(), async (req, res) => {
+  console.log('=== MCP Request on ROOT ===');
+  console.log('Headers:', req.headers);
+  console.log('Body:', JSON.stringify(req.body, null, 2));
+  
   const authHeader = req.headers.authorization;
   
+  // For initialize requests, we might not have auth yet
+  if (req.body.method === 'initialize') {
+    console.log('Initialize request - no auth required');
+    return res.json({
+      jsonrpc: "2.0",
+      id: req.body.id,
+      result: {
+        protocolVersion: "2024-11-05",
+        capabilities: {
+          tools: {}
+        },
+        serverInfo: {
+          name: "slack-user-token-server",
+          version: "1.0.0"
+        }
+      }
+    });
+  }
+  
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    console.log('Missing or invalid authorization header');
     return res.status(401).json({ 
+      jsonrpc: "2.0",
+      id: req.body.id,
       error: { code: -32600, message: 'Missing or invalid authorization header' }
     });
   }
   
   const token = authHeader.substring(7);
+  console.log('Token:', token);
   
   // Look up the token mapping
   const tokenMapping = userTokens.get(token);
   
   if (!tokenMapping) {
+    console.log('Token mapping not found');
+    console.log('Available tokens:', Array.from(userTokens.keys()));
     return res.status(401).json({ 
+      jsonrpc: "2.0",
+      id: req.body.id,
       error: { code: -32600, message: 'Invalid token' }
     });
   }
@@ -298,35 +329,25 @@ app.post('/mcp', express.json(), async (req, res) => {
   const slackTokenData = userTokens.get(slackTokenKey);
   
   if (!slackTokenData) {
+    console.log('Slack token not found for key:', slackTokenKey);
     return res.status(401).json({ 
+      jsonrpc: "2.0",
+      id: req.body.id,
       error: { code: -32600, message: 'Slack token not found' }
     });
   }
+  
+  console.log('Found Slack token for:', slackTokenData.team_name, slackTokenData.user_name);
   
   // Handle MCP protocol messages
   try {
     const { jsonrpc, id, method, params } = req.body;
     
-    console.log('MCP request:', { jsonrpc, id, method, params });
+    console.log('MCP Method:', method);
     
     switch (method) {
-      case 'initialize':
-        return res.json({
-          jsonrpc: "2.0",
-          id: id,
-          result: {
-            protocolVersion: "2024-11-05",
-            capabilities: {
-              tools: {}
-            },
-            serverInfo: {
-              name: "slack-user-token-server",
-              version: "1.0.0"
-            }
-          }
-        });
-        
       case 'tools/list':
+        console.log('Returning tools list');
         return res.json({
           jsonrpc: "2.0",
           id: id,
@@ -410,6 +431,7 @@ app.post('/mcp', express.json(), async (req, res) => {
                 }
               });
             } catch (error) {
+              console.error('Send message error:', error);
               return res.json({
                 jsonrpc: "2.0",
                 id: id,
@@ -445,6 +467,7 @@ app.post('/mcp', express.json(), async (req, res) => {
                 }
               });
             } catch (error) {
+              console.error('Get channels error:', error);
               return res.json({
                 jsonrpc: "2.0",
                 id: id,
@@ -483,6 +506,285 @@ app.post('/mcp', express.json(), async (req, res) => {
                 }
               });
             } catch (error) {
+              console.error('Get messages error:', error);
+              return res.json({
+                jsonrpc: "2.0",
+                id: id,
+                error: {
+                  code: -32603,
+                  message: `Failed to get messages: ${error.message}`
+                }
+              });
+            }
+            
+          default:
+            return res.json({
+              jsonrpc: "2.0",
+              id: id,
+              error: {
+                code: -32601,
+                message: `Unknown tool: ${name}`
+              }
+            });
+        }
+        
+      default:
+        return res.json({
+          jsonrpc: "2.0",
+          id: id,
+          error: {
+            code: -32601,
+            message: `Unknown method: ${method}`
+          }
+        });
+    }
+  } catch (error) {
+    console.error('MCP error:', error);
+    return res.json({
+      jsonrpc: "2.0",
+      id: req.body.id,
+      error: {
+        code: -32603,
+        message: `Internal error: ${error.message}`
+      }
+    });
+  }
+});
+
+// MCP endpoint for Claude to connect to
+app.post('/mcp', express.json(), async (req, res) => {
+  console.log('=== MCP Request ===');
+  console.log('Headers:', req.headers);
+  console.log('Body:', JSON.stringify(req.body, null, 2));
+  
+  const authHeader = req.headers.authorization;
+  
+  // For initialize requests, we might not have auth yet
+  if (req.body.method === 'initialize') {
+    console.log('Initialize request - no auth required');
+    return res.json({
+      jsonrpc: "2.0",
+      id: req.body.id,
+      result: {
+        protocolVersion: "2024-11-05",
+        capabilities: {
+          tools: {}
+        },
+        serverInfo: {
+          name: "slack-user-token-server",
+          version: "1.0.0"
+        }
+      }
+    });
+  }
+  
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    console.log('Missing or invalid authorization header');
+    return res.status(401).json({ 
+      jsonrpc: "2.0",
+      id: req.body.id,
+      error: { code: -32600, message: 'Missing or invalid authorization header' }
+    });
+  }
+  
+  const token = authHeader.substring(7);
+  console.log('Token:', token);
+  
+  // Look up the token mapping
+  const tokenMapping = userTokens.get(token);
+  
+  if (!tokenMapping) {
+    console.log('Token mapping not found');
+    return res.status(401).json({ 
+      jsonrpc: "2.0",
+      id: req.body.id,
+      error: { code: -32600, message: 'Invalid token' }
+    });
+  }
+  
+  // Get the actual Slack token
+  const slackTokenKey = `${tokenMapping.team_id}:${tokenMapping.user_id}`;
+  const slackTokenData = userTokens.get(slackTokenKey);
+  
+  if (!slackTokenData) {
+    console.log('Slack token not found for key:', slackTokenKey);
+    return res.status(401).json({ 
+      jsonrpc: "2.0",
+      id: req.body.id,
+      error: { code: -32600, message: 'Slack token not found' }
+    });
+  }
+  
+  console.log('Found Slack token for:', slackTokenData.team_name, slackTokenData.user_name);
+  
+  // Handle MCP protocol messages
+  try {
+    const { jsonrpc, id, method, params } = req.body;
+    
+    console.log('MCP Method:', method);
+    
+    switch (method) {
+      case 'tools/list':
+        console.log('Returning tools list');
+        return res.json({
+          jsonrpc: "2.0",
+          id: id,
+          result: {
+            tools: [
+              {
+                name: "slack_send_message",
+                description: "Send a message to a Slack channel or user",
+                inputSchema: {
+                  type: "object",
+                  properties: {
+                    channel: { 
+                      type: "string", 
+                      description: "Channel name (e.g., #general) or user ID" 
+                    },
+                    text: { 
+                      type: "string", 
+                      description: "Message text to send" 
+                    }
+                  },
+                  required: ["channel", "text"]
+                }
+              },
+              {
+                name: "slack_get_channels", 
+                description: "Get list of channels you have access to",
+                inputSchema: {
+                  type: "object",
+                  properties: {},
+                  required: []
+                }
+              },
+              {
+                name: "slack_get_messages",
+                description: "Get recent messages from a channel",
+                inputSchema: {
+                  type: "object",
+                  properties: {
+                    channel: { 
+                      type: "string", 
+                      description: "Channel name (e.g., #general) or channel ID" 
+                    },
+                    limit: { 
+                      type: "number", 
+                      description: "Number of messages to retrieve (default: 10, max: 100)",
+                      default: 10
+                    }
+                  },
+                  required: ["channel"]
+                }
+              }
+            ]
+          }
+        });
+        
+      case 'tools/call':
+        const { name, arguments: args } = params;
+        
+        console.log('Tool call:', name, args);
+        
+        const slack = new WebClient(slackTokenData.access_token);
+        
+        switch (name) {
+          case 'slack_send_message':
+            try {
+              const result = await slack.chat.postMessage({
+                channel: args.channel,
+                text: args.text
+              });
+              
+              return res.json({
+                jsonrpc: "2.0",
+                id: id,
+                result: {
+                  content: [
+                    {
+                      type: "text",
+                      text: `✅ Message sent successfully to ${args.channel}!\n\nTimestamp: ${result.ts}\nChannel: ${result.channel}`
+                    }
+                  ]
+                }
+              });
+            } catch (error) {
+              console.error('Send message error:', error);
+              return res.json({
+                jsonrpc: "2.0",
+                id: id,
+                error: {
+                  code: -32603,
+                  message: `Failed to send message: ${error.message}`
+                }
+              });
+            }
+            
+          case 'slack_get_channels':
+            try {
+              const channels = await slack.conversations.list({
+                types: "public_channel,private_channel",
+                limit: 100
+              });
+              
+              const channelList = channels.channels
+                .filter(ch => ch.is_member)
+                .map(ch => `• #${ch.name} (${ch.is_private ? 'private' : 'public'})`)
+                .join('\n');
+              
+              return res.json({
+                jsonrpc: "2.0",
+                id: id,
+                result: {
+                  content: [
+                    {
+                      type: "text",
+                      text: `📋 Your Slack channels:\n\n${channelList}`
+                    }
+                  ]
+                }
+              });
+            } catch (error) {
+              console.error('Get channels error:', error);
+              return res.json({
+                jsonrpc: "2.0",
+                id: id,
+                error: {
+                  code: -32603,
+                  message: `Failed to get channels: ${error.message}`
+                }
+              });
+            }
+            
+          case 'slack_get_messages':
+            try {
+              const messages = await slack.conversations.history({
+                channel: args.channel,
+                limit: Math.min(args.limit || 10, 100)
+              });
+              
+              const messageList = messages.messages
+                .slice(0, 10)
+                .map(msg => {
+                  const timestamp = new Date(parseInt(msg.ts) * 1000).toLocaleString();
+                  return `[${timestamp}] ${msg.user}: ${msg.text || '(no text)'}`;
+                })
+                .join('\n');
+              
+              return res.json({
+                jsonrpc: "2.0",
+                id: id,
+                result: {
+                  content: [
+                    {
+                      type: "text",
+                      text: `💬 Recent messages from ${args.channel}:\n\n${messageList}`
+                    }
+                  ]
+                }
+              });
+            } catch (error) {
+              console.error('Get messages error:', error);
               return res.json({
                 jsonrpc: "2.0",
                 id: id,
