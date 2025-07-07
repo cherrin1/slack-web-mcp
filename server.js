@@ -14,33 +14,22 @@ app.use(cors({
   optionsSuccessStatus: 200
 }));
 
-// Handle preflight requests
 app.options('*', cors());
-
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // In-memory storage
-const registeredTokens = new Map(); // token -> userInfo
-const activeSessions = new Map(); // sessionId -> session info
-const oauthClients = new Map(); // clientId -> client info
-const authorizationCodes = new Map(); // code -> token info
+const registeredTokens = new Map();
+const activeSessions = new Map();
+const oauthClients = new Map();
+const authorizationCodes = new Map();
 
-// Pre-register common client IDs that Claude might use
+// Pre-register Claude client IDs
 const preRegisteredClients = [
   {
     client_id: 'slack-mcp-claude-web',
-    client_secret: null, // Public client
-    client_name: 'Claude Web Client',
-    redirect_uris: ['https://claude.ai/api/mcp/auth_callback'],
-    grant_types: ['authorization_code', 'refresh_token'],
-    response_types: ['code'],
-    scope: 'mcp'
-  },
-  {
-    client_id: 'claude-mcp-client',
     client_secret: null,
-    client_name: 'Claude MCP Client',
+    client_name: 'Claude Web Client',
     redirect_uris: ['https://claude.ai/api/mcp/auth_callback'],
     grant_types: ['authorization_code', 'refresh_token'],
     response_types: ['code'],
@@ -48,7 +37,6 @@ const preRegisteredClients = [
   }
 ];
 
-// Register pre-defined clients
 preRegisteredClients.forEach(client => {
   oauthClients.set(client.client_id, {
     ...client,
@@ -56,9 +44,7 @@ preRegisteredClients.forEach(client => {
   });
 });
 
-console.log('🔐 Pre-registered OAuth clients:', preRegisteredClients.map(c => c.client_id));
-
-// Enhanced SlackClient
+// SlackClient class
 class SlackClient {
   constructor(token) {
     this.token = token;
@@ -109,52 +95,38 @@ class SlackClient {
     }
   }
 
-  async testAuth() { 
-    return await this.makeRequest('auth.test'); 
-  }
-  
+  async testAuth() { return await this.makeRequest('auth.test'); }
   async getChannels(types = 'public_channel,private_channel', limit = 100) { 
     return await this.makeRequest('conversations.list', { types, limit }); 
   }
-  
   async getChannelHistory(channel, limit = 50) { 
     return await this.makeRequest('conversations.history', { channel, limit }); 
   }
-  
   async sendMessage(channel, text, options = {}) { 
     return await this.makeRequest('chat.postMessage', { channel, text, ...options }, 'POST'); 
   }
-  
   async getUsers(limit = 100) { 
     return await this.makeRequest('users.list', { limit }); 
   }
-
   async getChannelInfo(channel) {
     return await this.makeRequest('conversations.info', { channel });
   }
-
   async getUserInfo(user) {
     return await this.makeRequest('users.info', { user });
   }
 }
 
-// Enhanced authentication - support both Bearer tokens and OAuth tokens
+// Authentication function
 async function authenticateRequest(req) {
   const authHeader = req.headers.authorization;
-  if (!authHeader) {
-    console.log('🔍 No authorization header found');
-    return null;
-  }
+  if (!authHeader) return null;
 
   const token = authHeader.replace('Bearer ', '');
   
   // Check if it's a registered Slack token
   if (token.startsWith('xoxp-')) {
     const userInfo = registeredTokens.get(token);
-    if (!userInfo) {
-      console.log('🔍 Slack token not found in registered tokens');
-      return null;
-    }
+    if (!userInfo) return null;
     console.log('✅ Slack token authenticated for user:', userInfo.userName || 'Unknown');
     return { token, userInfo, type: 'slack' };
   }
@@ -167,11 +139,10 @@ async function authenticateRequest(req) {
     }
   }
 
-  console.log('🔍 Token not recognized:', token.substring(0, 10) + '...');
   return null;
 }
 
-// OAuth Discovery endpoint (required for MCP)
+// OAuth Discovery endpoint
 app.get('/.well-known/oauth-authorization-server', (req, res) => {
   const baseUrl = `https://${req.get('host')}`;
   res.json({
@@ -187,7 +158,7 @@ app.get('/.well-known/oauth-authorization-server', (req, res) => {
   });
 });
 
-// Dynamic Client Registration (required for Claude MCP)
+// Dynamic Client Registration
 app.post('/oauth/register', (req, res) => {
   console.log('🔐 OAuth client registration request:', req.body);
   
@@ -215,7 +186,6 @@ app.post('/oauth/register', (req, res) => {
   };
   
   oauthClients.set(clientId, clientInfo);
-  
   console.log('✅ OAuth client registered:', clientId);
   
   res.json({
@@ -235,17 +205,8 @@ app.post('/oauth/register', (req, res) => {
 app.get('/oauth/authorize', (req, res) => {
   console.log('🔐 OAuth authorize request:', req.query);
   
-  const { 
-    client_id, 
-    redirect_uri, 
-    response_type, 
-    scope, 
-    state, 
-    code_challenge, 
-    code_challenge_method 
-  } = req.query;
+  const { client_id, redirect_uri, response_type, scope, state, code_challenge, code_challenge_method } = req.query;
   
-  // Validate client
   const client = oauthClients.get(client_id);
   if (!client) {
     return res.status(400).json({
@@ -254,7 +215,6 @@ app.get('/oauth/authorize', (req, res) => {
     });
   }
   
-  // Validate redirect URI
   if (!client.redirect_uris.includes(redirect_uri)) {
     return res.status(400).json({
       error: 'invalid_request',
@@ -262,7 +222,6 @@ app.get('/oauth/authorize', (req, res) => {
     });
   }
   
-  // Generate authorization code
   const authCode = `mcp_code_${Date.now()}_${Math.random().toString(36).substring(7)}`;
   const codeInfo = {
     client_id,
@@ -272,21 +231,19 @@ app.get('/oauth/authorize', (req, res) => {
     code_challenge,
     code_challenge_method,
     created_at: new Date(),
-    expires_at: new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
+    expires_at: new Date(Date.now() + 10 * 60 * 1000)
   };
   
   authorizationCodes.set(authCode, codeInfo);
   
-  // Auto-approve for registered users or redirect to connect page
+  // Auto-approve for registered users
   if (registeredTokens.size > 0) {
-    // Auto-approve with the first registered token
     const [firstToken, userInfo] = Array.from(registeredTokens.entries())[0];
     codeInfo.approved = true;
     codeInfo.user_token = firstToken;
     
     console.log('✅ Auto-approved OAuth for user:', userInfo.userName);
     
-    // Redirect back to Claude
     const redirectUrl = new URL(redirect_uri);
     redirectUrl.searchParams.set('code', authCode);
     if (state) redirectUrl.searchParams.set('state', state);
@@ -294,7 +251,7 @@ app.get('/oauth/authorize', (req, res) => {
     return res.redirect(redirectUrl.toString());
   }
   
-  // Redirect to connect page for token registration
+  // Redirect to connect page
   const connectUrl = new URL(`https://${req.get('host')}/connect`);
   connectUrl.searchParams.set('oauth', 'true');
   connectUrl.searchParams.set('client_id', client_id);
@@ -309,7 +266,7 @@ app.get('/oauth/authorize', (req, res) => {
 app.post('/oauth/token', (req, res) => {
   console.log('🔐 OAuth token request:', req.body);
   
-  const { grant_type, code, client_id, client_secret, redirect_uri, code_verifier } = req.body;
+  const { grant_type, code, client_id, client_secret, redirect_uri } = req.body;
   
   if (grant_type !== 'authorization_code') {
     return res.status(400).json({
@@ -320,7 +277,59 @@ app.post('/oauth/token', (req, res) => {
   
   const codeInfo = authorizationCodes.get(code);
   if (!codeInfo) {
-    console.log('❌ Authorization code not found:',
+    console.log('❌ Authorization code not found:', code);
+    return res.status(400).json({
+      error: 'invalid_grant',
+      error_description: 'Invalid authorization code'
+    });
+  }
+  
+  if (new Date() > codeInfo.expires_at) {
+    authorizationCodes.delete(code);
+    console.log('❌ Authorization code expired:', code);
+    return res.status(400).json({
+      error: 'invalid_grant',
+      error_description: 'Authorization code expired'
+    });
+  }
+  
+  const client = oauthClients.get(client_id);
+  if (!client) {
+    console.log('❌ Client not found:', client_id);
+    console.log('❌ Available clients:', Array.from(oauthClients.keys()));
+    return res.status(400).json({
+      error: 'invalid_client',
+      error_description: 'Invalid client_id'
+    });
+  }
+  
+  if (client.client_secret && client.client_secret !== client_secret) {
+    console.log('❌ Client secret mismatch for:', client_id);
+    return res.status(400).json({
+      error: 'invalid_client',
+      error_description: 'Invalid client credentials'
+    });
+  }
+  
+  const accessToken = `mcp_access_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+  
+  if (codeInfo.user_token && registeredTokens.has(codeInfo.user_token)) {
+    const userInfo = registeredTokens.get(codeInfo.user_token);
+    if (!userInfo.accessTokens) userInfo.accessTokens = [];
+    userInfo.accessTokens.push(accessToken);
+    console.log('✅ Access token linked to user:', userInfo.userName);
+  }
+  
+  authorizationCodes.delete(code);
+  console.log('✅ OAuth access token issued for client:', client_id);
+  
+  res.json({
+    access_token: accessToken,
+    token_type: 'Bearer',
+    expires_in: 3600,
+    scope: codeInfo.scope || 'mcp'
+  });
+});
 
 // Server info endpoint
 app.get('/', (req, res) => {
@@ -328,29 +337,16 @@ app.get('/', (req, res) => {
     name: "Slack MCP Server",
     version: "2.0.0",
     description: "Connect your Slack workspace to Claude via MCP",
-    server: "slack-mcp-server",
-    capabilities: {
-      tools: {},
-      resources: {},
-      prompts: {}
-    },
-    protocolVersion: "2024-11-05",
     status: "ready",
     endpoints: {
       mcp: "/mcp",
       connect: "/connect",
-      health: "/health",
-      oauth: {
-        discovery: "/.well-known/oauth-authorization-server",
-        register: "/oauth/register",
-        authorize: "/oauth/authorize",
-        token: "/oauth/token"
-      }
+      health: "/health"
     }
   });
 });
 
-// Health check endpoint
+// Health check
 app.get('/health', (req, res) => {
   res.json({
     status: "healthy",
@@ -361,7 +357,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Enhanced registration
+// Registration
 app.post('/register', async (req, res) => {
   const { slackToken, userInfo = {}, oauth_code } = req.body;
   
@@ -387,7 +383,6 @@ app.post('/register', async (req, res) => {
     
     registeredTokens.set(slackToken, enrichedUserInfo);
     
-    // If there's an OAuth code, approve it
     if (oauth_code && authorizationCodes.has(oauth_code)) {
       const codeInfo = authorizationCodes.get(oauth_code);
       codeInfo.approved = true;
@@ -421,107 +416,44 @@ app.get('/connect', (req, res) => {
 <html>
 <head>
     <title>Connect Slack to Claude</title>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
-        * { box-sizing: border-box; }
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            margin: 0; padding: 20px; min-height: 100vh; display: flex; align-items: center; justify-content: center;
-        }
-        .container { 
-            background: white; padding: 40px; border-radius: 16px; 
-            box-shadow: 0 20px 40px rgba(0,0,0,0.1); max-width: 500px; width: 100%;
-        }
-        h1 { color: #2d3748; margin-bottom: 8px; font-size: 28px; text-align: center; }
-        .subtitle { color: #718096; text-align: center; margin-bottom: 32px; }
-        .info-box { 
-            background: #f7fafc; border: 1px solid #e2e8f0; border-radius: 8px; 
-            padding: 16px; margin-bottom: 24px; font-size: 14px; line-height: 1.5;
-        }
-        .oauth-box {
-            background: #e6f3ff; border: 1px solid #3182ce; border-radius: 8px;
-            padding: 16px; margin-bottom: 24px; font-size: 14px; line-height: 1.5;
-        }
-        .form-group { margin-bottom: 20px; }
-        label { display: block; margin-bottom: 8px; font-weight: 600; color: #2d3748; }
-        input { 
-            width: 100%; padding: 12px; border: 2px solid #e2e8f0; border-radius: 8px; 
-            font-size: 16px; transition: border-color 0.2s;
-        }
-        input:focus { outline: none; border-color: #667eea; }
-        button { 
-            width: 100%; background: #667eea; color: white; padding: 14px; 
-            border: none; border-radius: 8px; font-size: 16px; font-weight: 600; 
-            cursor: pointer; transition: background-color 0.2s;
-        }
-        button:hover { background: #5a67d8; }
-        button:disabled { background: #a0aec0; cursor: not-allowed; }
-        .status { 
-            margin-top: 20px; padding: 12px; border-radius: 8px; display: none;
-            font-weight: 500;
-        }
-        .success { background: #f0fff4; color: #22543d; border: 1px solid #68d391; }
-        .error { background: #fed7d7; color: #c53030; border: 1px solid #fc8181; }
-        .loading { background: #ebf8ff; color: #2a69ac; border: 1px solid #63b3ed; }
-        .step { margin-bottom: 24px; }
-        .step-number { 
-            display: inline-block; width: 24px; height: 24px; 
-            background: #667eea; color: white; border-radius: 50%; 
-            text-align: center; line-height: 24px; font-size: 14px; font-weight: 600;
-            margin-right: 8px;
-        }
-        .code-box { 
-            background: #1a202c; color: #e2e8f0; padding: 12px; border-radius: 6px; 
-            font-family: 'Monaco', 'Consolas', monospace; font-size: 14px; 
-            word-break: break-all; margin: 8px 0;
-        }
+        body { font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; }
+        .container { background: white; padding: 30px; border-radius: 10px; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; }
+        button { background: #007cba; color: white; padding: 12px 24px; border: none; border-radius: 5px; cursor: pointer; width: 100%; }
+        .status { margin-top: 15px; padding: 12px; border-radius: 5px; display: none; }
+        .success { background: #d4edda; color: #155724; }
+        .error { background: #f8d7da; color: #721c24; }
+        .code-box { background: #f8f9fa; padding: 12px; border-radius: 5px; font-family: monospace; }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>🚀 Connect Slack to Claude</h1>
-        <p class="subtitle">Integrate your Slack workspace with Claude's AI assistant</p>
+        ${isOAuth ? '<p><strong>OAuth Authentication:</strong> Complete the connection by registering your Slack token.</p>' : ''}
         
-        ${isOAuth ? `
-        <div class="oauth-box">
-            <strong>🔐 OAuth Authentication</strong><br>
-            Claude is requesting access to your Slack workspace. Please register your token to complete the connection.
-        </div>
-        ` : ''}
-        
-        <div class="step">
-            <div><span class="step-number">1</span><strong>MCP Server URL</strong></div>
-            <div class="info-box">
-                Use this URL when adding the MCP server to Claude:
-                <div class="code-box">${serverUrl}/mcp</div>
-            </div>
+        <div style="margin-bottom: 20px;">
+            <strong>MCP Server URL:</strong>
+            <div class="code-box">${serverUrl}/mcp</div>
+            <strong>Client ID:</strong>
+            <div class="code-box">slack-mcp-claude-web</div>
         </div>
 
-        <div class="step">
-            <div><span class="step-number">2</span><strong>Get Your Slack Token</strong></div>
-            <div class="info-box">
-                Visit <a href="https://api.slack.com/custom-integrations/legacy-tokens" target="_blank">Slack Legacy Tokens</a> 
-                to get your user token (starts with xoxp-).
+        <form id="registrationForm">
+            <div class="form-group">
+                <label for="token">Slack User Token *</label>
+                <input type="text" id="token" placeholder="xoxp-your-slack-token-here" required>
+                <small>Get your token from <a href="https://api.slack.com/custom-integrations/legacy-tokens" target="_blank">Slack Legacy Tokens</a></small>
             </div>
-        </div>
-
-        <div class="step">
-            <div><span class="step-number">3</span><strong>Register Your Token</strong></div>
-            <form id="registrationForm">
-                <div class="form-group">
-                    <label for="token">Slack User Token *</label>
-                    <input type="text" id="token" placeholder="xoxp-your-slack-token-here" required>
-                </div>
-                <div class="form-group">
-                    <label for="name">Your Name (Optional)</label>
-                    <input type="text" id="name" placeholder="John Doe">
-                </div>
-                <button type="submit" id="submitBtn">${isOAuth ? 'Complete OAuth Connection' : 'Connect to Claude'}</button>
-            </form>
-            <div class="status" id="status"></div>
-        </div>
+            <div class="form-group">
+                <label for="name">Your Name (Optional)</label>
+                <input type="text" id="name" placeholder="John Doe">
+            </div>
+            <button type="submit" id="submitBtn">${isOAuth ? 'Complete OAuth Connection' : 'Connect to Claude'}</button>
+        </form>
+        <div class="status" id="status"></div>
     </div>
 
     <script>
@@ -545,7 +477,7 @@ app.get('/connect', (req, res) => {
             
             submitBtn.disabled = true;
             submitBtn.textContent = 'Connecting...';
-            showStatus('loading', 'Validating Slack token...');
+            showStatus('', 'Validating Slack token...');
             
             try {
                 const response = await fetch('/register', {
@@ -561,19 +493,15 @@ app.get('/connect', (req, res) => {
                 const data = await response.json();
                 
                 if (data.success) {
-                    showStatus('success', 
-                        \`✅ Successfully connected! Welcome \${data.userInfo.userName} from \${data.userInfo.teamName}.\`);
+                    showStatus('success', \`✅ Successfully connected! Welcome \${data.userInfo.userName} from \${data.userInfo.teamName}.\`);
                     
                     if (isOAuth && redirectUri) {
-                        showStatus('success', '🔄 Redirecting back to Claude...');
                         setTimeout(() => {
                             const returnUrl = new URL(redirectUri);
                             returnUrl.searchParams.set('code', oauthCode);
                             if (state) returnUrl.searchParams.set('state', state);
                             window.location.href = returnUrl.toString();
                         }, 2000);
-                    } else {
-                        showStatus('success', 'Your Slack workspace is now ready to use with Claude!');
                     }
                     
                     document.getElementById('registrationForm').style.display = 'none';
@@ -602,12 +530,10 @@ app.get('/connect', (req, res) => {
   res.send(html);
 });
 
-// SSE endpoint following MCP specification
+// SSE endpoint
 app.get('/mcp', async (req, res) => {
   console.log('🔄 SSE connection request received');
-  console.log('🔄 Authorization header:', req.headers.authorization ? 'Present' : 'Missing');
   
-  // Authenticate the request
   const auth = await authenticateRequest(req);
   if (!auth) {
     console.log('❌ SSE authentication failed');
@@ -617,10 +543,8 @@ app.get('/mcp', async (req, res) => {
     });
   }
 
-  // Generate session ID
   const sessionId = `sess_${Date.now()}_${Math.random().toString(36).substring(7)}`;
   
-  // Set SSE headers
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
@@ -631,7 +555,6 @@ app.get('/mcp', async (req, res) => {
     'Mcp-Session-Id': sessionId
   });
 
-  // Store session
   const session = {
     id: sessionId,
     auth: auth,
@@ -643,11 +566,9 @@ app.get('/mcp', async (req, res) => {
 
   console.log('✅ SSE connection established:', sessionId, 'for user:', auth.userInfo.userName);
 
-  // Send initial endpoint message as required by MCP SSE spec
   res.write(`event: endpoint\n`);
   res.write(`data: /messages\n\n`);
 
-  // Keep connection alive with ping events
   const keepAlive = setInterval(() => {
     if (activeSessions.has(sessionId)) {
       res.write(`: ping ${Date.now()}\n\n`);
@@ -657,7 +578,6 @@ app.get('/mcp', async (req, res) => {
     }
   }, 30000);
 
-  // Handle client disconnect
   req.on('close', () => {
     console.log('🔌 SSE connection closed:', sessionId);
     clearInterval(keepAlive);
@@ -671,28 +591,23 @@ app.get('/mcp', async (req, res) => {
   });
 });
 
-// Messages endpoint for POST requests (required by MCP SSE spec)
+// Messages endpoint
 app.post('/messages', async (req, res) => {
   const sessionId = req.headers['mcp-session-id'];
   const { method, params, id } = req.body || {};
   
   console.log(`🔧 MCP Message: ${method} (session: ${sessionId})`);
   
-  // Find session
   const session = sessionId ? activeSessions.get(sessionId) : null;
   if (!session) {
     console.log('❌ Session not found:', sessionId);
     return res.status(401).json({
       jsonrpc: '2.0',
-      error: {
-        code: -32001,
-        message: 'Session not found. Please establish SSE connection first.'
-      },
+      error: { code: -32001, message: 'Session not found. Please establish SSE connection first.' },
       id
     });
   }
 
-  // Update session activity
   session.lastActivity = new Date();
 
   try {
@@ -700,24 +615,14 @@ app.post('/messages', async (req, res) => {
     
     switch (method) {
       case 'initialize':
-        console.log('🔧 Initialize request');
         result = {
           protocolVersion: '2024-11-05',
-          capabilities: {
-            tools: {},
-            resources: {},
-            prompts: {}
-          },
-          serverInfo: {
-            name: 'slack-mcp-server',
-            version: '2.0.0',
-            description: 'Slack integration for Claude via MCP'
-          }
+          capabilities: { tools: {}, resources: {}, prompts: {} },
+          serverInfo: { name: 'slack-mcp-server', version: '2.0.0', description: 'Slack integration for Claude via MCP' }
         };
         break;
 
       case 'tools/list':
-        console.log('🔧 Tools list request');
         result = {
           tools: [
             {
@@ -726,16 +631,8 @@ app.post('/messages', async (req, res) => {
               inputSchema: {
                 type: 'object',
                 properties: {
-                  types: { 
-                    type: 'string', 
-                    description: 'Channel types to include (public_channel,private_channel,mpim,im)', 
-                    default: 'public_channel,private_channel' 
-                  },
-                  limit: { 
-                    type: 'number', 
-                    description: 'Maximum number of channels to return', 
-                    default: 100 
-                  }
+                  types: { type: 'string', description: 'Channel types to include', default: 'public_channel,private_channel' },
+                  limit: { type: 'number', description: 'Maximum number of channels to return', default: 100 }
                 }
               }
             },
@@ -745,15 +642,8 @@ app.post('/messages', async (req, res) => {
               inputSchema: {
                 type: 'object',
                 properties: {
-                  channel: { 
-                    type: 'string', 
-                    description: 'Channel ID (e.g., C1234567890) or channel name (e.g., #general)' 
-                  },
-                  limit: { 
-                    type: 'number', 
-                    description: 'Number of messages to retrieve', 
-                    default: 20 
-                  }
+                  channel: { type: 'string', description: 'Channel ID or name' },
+                  limit: { type: 'number', description: 'Number of messages to retrieve', default: 20 }
                 },
                 required: ['channel']
               }
@@ -764,18 +654,8 @@ app.post('/messages', async (req, res) => {
               inputSchema: {
                 type: 'object',
                 properties: {
-                  channel: { 
-                    type: 'string', 
-                    description: 'Channel ID (e.g., C1234567890) or channel name (e.g., #general)' 
-                  },
-                  text: { 
-                    type: 'string', 
-                    description: 'Message text to send' 
-                  },
-                  thread_ts: {
-                    type: 'string',
-                    description: 'Thread timestamp to reply to a specific message'
-                  }
+                  channel: { type: 'string', description: 'Channel ID or name' },
+                  text: { type: 'string', description: 'Message text to send' }
                 },
                 required: ['channel', 'text']
               }
@@ -786,26 +666,8 @@ app.post('/messages', async (req, res) => {
               inputSchema: {
                 type: 'object',
                 properties: {
-                  limit: { 
-                    type: 'number', 
-                    description: 'Maximum number of users to return', 
-                    default: 100 
-                  }
+                  limit: { type: 'number', description: 'Maximum number of users to return', default: 100 }
                 }
-              }
-            },
-            {
-              name: 'slack_get_channel_info',
-              description: 'Get detailed information about a specific channel',
-              inputSchema: {
-                type: 'object',
-                properties: {
-                  channel: { 
-                    type: 'string', 
-                    description: 'Channel ID or name' 
-                  }
-                },
-                required: ['channel']
               }
             }
           ]
@@ -813,8 +675,6 @@ app.post('/messages', async (req, res) => {
         break;
 
       case 'tools/call':
-        console.log('🔧 Tool call request:', params?.name);
-        
         const { name, arguments: args } = params;
         const slackClient = new SlackClient(session.auth.token);
         
@@ -824,67 +684,42 @@ app.post('/messages', async (req, res) => {
         } catch (error) {
           console.error('❌ Tool call failed:', error.message);
           result = {
-            content: [{ 
-              type: 'text', 
-              text: `Error executing ${name}: ${error.message}` 
-            }],
+            content: [{ type: 'text', text: `Error executing ${name}: ${error.message}` }],
             isError: true
           };
         }
         break;
 
       default:
-        console.log('❌ Unknown method:', method);
         return res.status(400).json({
           jsonrpc: '2.0',
-          error: { 
-            code: -32601, 
-            message: `Method not found: ${method}` 
-          },
+          error: { code: -32601, message: `Method not found: ${method}` },
           id
         });
     }
 
-    // Send response
-    const response = {
-      jsonrpc: '2.0',
-      result,
-      id
-    };
-
-    return res.json(response);
+    return res.json({ jsonrpc: '2.0', result, id });
 
   } catch (error) {
     console.error('❌ MCP Error:', error);
     return res.status(500).json({
       jsonrpc: '2.0',
-      error: { 
-        code: -32603, 
-        message: 'Internal error: ' + error.message 
-      },
+      error: { code: -32603, message: 'Internal error: ' + error.message },
       id
     });
   }
 });
 
-// Main MCP POST endpoint for HTTP transport
+// HTTP MCP endpoint
 app.post('/mcp', async (req, res) => {
   const { method, params, id } = req.body || {};
-  
   console.log(`🔧 MCP HTTP Request: ${method}`);
   
-  // For HTTP transport, authenticate on each request (except for discovery)
   const auth = await authenticateRequest(req);
   if (!auth && method !== 'initialize' && method !== 'tools/list') {
     return res.status(401).json({
       jsonrpc: '2.0',
-      error: {
-        code: -32001,
-        message: 'Authentication required. Please register your Slack token first.',
-        data: {
-          connectUrl: `https://${req.get('host')}/connect`
-        }
-      },
+      error: { code: -32001, message: 'Authentication required. Please register your Slack token first.' },
       id
     });
   }
@@ -894,60 +729,35 @@ app.post('/mcp', async (req, res) => {
     
     switch (method) {
       case 'initialize':
-        console.log('🔧 HTTP Initialize request');
         result = {
           protocolVersion: '2024-11-05',
-          capabilities: {
-            tools: {},
-            resources: {},
-            prompts: {}
-          },
-          serverInfo: {
-            name: 'slack-mcp-server',
-            version: '2.0.0',
-            description: 'Slack integration for Claude via MCP'
-          }
+          capabilities: { tools: {}, resources: {}, prompts: {} },
+          serverInfo: { name: 'slack-mcp-server', version: '2.0.0', description: 'Slack integration for Claude via MCP' }
         };
         break;
 
       case 'tools/list':
-        console.log('🔧 HTTP Tools list request');
         result = {
           tools: [
             {
               name: 'slack_get_channels',
-              description: 'List available Slack channels with detailed information',
+              description: 'List available Slack channels',
               inputSchema: {
                 type: 'object',
                 properties: {
-                  types: { 
-                    type: 'string', 
-                    description: 'Channel types to include (public_channel,private_channel,mpim,im)', 
-                    default: 'public_channel,private_channel' 
-                  },
-                  limit: { 
-                    type: 'number', 
-                    description: 'Maximum number of channels to return', 
-                    default: 100 
-                  }
+                  types: { type: 'string', default: 'public_channel,private_channel' },
+                  limit: { type: 'number', default: 100 }
                 }
               }
             },
             {
               name: 'slack_get_channel_history',
-              description: 'Get recent messages from a specific Slack channel',
+              description: 'Get recent messages from a Slack channel',
               inputSchema: {
                 type: 'object',
                 properties: {
-                  channel: { 
-                    type: 'string', 
-                    description: 'Channel ID (e.g., C1234567890) or channel name (e.g., #general)' 
-                  },
-                  limit: { 
-                    type: 'number', 
-                    description: 'Number of messages to retrieve', 
-                    default: 20 
-                  }
+                  channel: { type: 'string' },
+                  limit: { type: 'number', default: 20 }
                 },
                 required: ['channel']
               }
@@ -958,18 +768,8 @@ app.post('/mcp', async (req, res) => {
               inputSchema: {
                 type: 'object',
                 properties: {
-                  channel: { 
-                    type: 'string', 
-                    description: 'Channel ID (e.g., C1234567890) or channel name (e.g., #general)' 
-                  },
-                  text: { 
-                    type: 'string', 
-                    description: 'Message text to send' 
-                  },
-                  thread_ts: {
-                    type: 'string',
-                    description: 'Thread timestamp to reply to a specific message'
-                  }
+                  channel: { type: 'string' },
+                  text: { type: 'string' }
                 },
                 required: ['channel', 'text']
               }
@@ -980,26 +780,8 @@ app.post('/mcp', async (req, res) => {
               inputSchema: {
                 type: 'object',
                 properties: {
-                  limit: { 
-                    type: 'number', 
-                    description: 'Maximum number of users to return', 
-                    default: 100 
-                  }
+                  limit: { type: 'number', default: 100 }
                 }
-              }
-            },
-            {
-              name: 'slack_get_channel_info',
-              description: 'Get detailed information about a specific channel',
-              inputSchema: {
-                type: 'object',
-                properties: {
-                  channel: { 
-                    type: 'string', 
-                    description: 'Channel ID or name' 
-                  }
-                },
-                required: ['channel']
               }
             }
           ]
@@ -1007,66 +789,43 @@ app.post('/mcp', async (req, res) => {
         break;
 
       case 'tools/call':
-        console.log('🔧 HTTP Tool call request:', params?.name);
-        
         const { name, arguments: args } = params;
         const slackClient = new SlackClient(auth.token);
         
         try {
           result = await handleToolCall(name, args, slackClient);
-          console.log('✅ HTTP Tool call completed:', name);
         } catch (error) {
-          console.error('❌ HTTP Tool call failed:', error.message);
           result = {
-            content: [{ 
-              type: 'text', 
-              text: `Error executing ${name}: ${error.message}` 
-            }],
+            content: [{ type: 'text', text: `Error executing ${name}: ${error.message}` }],
             isError: true
           };
         }
         break;
 
       default:
-        console.log('❌ Unknown HTTP method:', method);
         return res.status(400).json({
           jsonrpc: '2.0',
-          error: { 
-            code: -32601, 
-            message: `Method not found: ${method}` 
-          },
+          error: { code: -32601, message: `Method not found: ${method}` },
           id
         });
     }
 
-    return res.json({
-      jsonrpc: '2.0',
-      result,
-      id
-    });
+    return res.json({ jsonrpc: '2.0', result, id });
 
   } catch (error) {
-    console.error('❌ MCP HTTP Error:', error);
     return res.status(500).json({
       jsonrpc: '2.0',
-      error: { 
-        code: -32603, 
-        message: 'Internal error: ' + error.message 
-      },
+      error: { code: -32603, message: 'Internal error: ' + error.message },
       id
     });
   }
 });
 
-// Tool call handler
+// Tool handler
 async function handleToolCall(name, args, slackClient) {
   switch (name) {
     case 'slack_get_channels':
-      const channels = await slackClient.getChannels(
-        args?.types || 'public_channel,private_channel', 
-        args?.limit || 100
-      );
-      
+      const channels = await slackClient.getChannels(args?.types || 'public_channel,private_channel', args?.limit || 100);
       const channelList = channels.channels.map(ch => {
         const memberCount = ch.num_members ? ` (${ch.num_members} members)` : '';
         const purpose = ch.purpose?.value || ch.topic?.value || 'No description';
@@ -1074,99 +833,40 @@ async function handleToolCall(name, args, slackClient) {
       }).join('\n\n');
       
       return {
-        content: [{
-          type: 'text',
-          text: `Found ${channels.channels.length} channels:\n\n${channelList}`
-        }]
+        content: [{ type: 'text', text: `Found ${channels.channels.length} channels:\n\n${channelList}` }]
       };
 
     case 'slack_get_channel_history':
       const history = await slackClient.getChannelHistory(args.channel, args?.limit || 20);
-      
-      // Get user info for better formatting
-      const userIds = [...new Set(history.messages.map(msg => msg.user).filter(Boolean))];
-      const users = new Map();
-      
-      try {
-        for (const userId of userIds.slice(0, 10)) {
-          const userInfo = await slackClient.getUserInfo(userId);
-          users.set(userId, userInfo.user.real_name || userInfo.user.name);
-        }
-      } catch (error) {
-        console.log('Could not fetch user info:', error.message);
-      }
-      
-      const messages = history.messages
-        .reverse()
-        .map(msg => {
-          const userName = users.get(msg.user) || msg.user || 'Unknown';
-          const timestamp = new Date(parseFloat(msg.ts) * 1000).toLocaleString();
-          const text = msg.text || '[No text content]';
-          return `**${userName}** (${timestamp})\n${text}`;
-        })
-        .join('\n\n---\n\n');
+      const messages = history.messages.reverse().map(msg => {
+        const userName = msg.user || 'Unknown';
+        const timestamp = new Date(parseFloat(msg.ts) * 1000).toLocaleString();
+        const text = msg.text || '[No text content]';
+        return `**${userName}** (${timestamp})\n${text}`;
+      }).join('\n\n---\n\n');
       
       return {
-        content: [{
-          type: 'text',
-          text: `Recent messages in ${args.channel}:\n\n${messages}`
-        }]
+        content: [{ type: 'text', text: `Recent messages in ${args.channel}:\n\n${messages}` }]
       };
 
     case 'slack_send_message':
-      const sendResult = await slackClient.sendMessage(
-        args.channel, 
-        args.text, 
-        args.thread_ts ? { thread_ts: args.thread_ts } : {}
-      );
-      
+      const sendResult = await slackClient.sendMessage(args.channel, args.text);
       return {
-        content: [{
-          type: 'text',
-          text: `✅ Message sent successfully to ${args.channel}!\n` +
-                `Message timestamp: ${sendResult.ts}\n` +
-                `Channel: ${sendResult.channel}`
-        }]
+        content: [{ type: 'text', text: `✅ Message sent successfully to ${args.channel}!\nMessage timestamp: ${sendResult.ts}` }]
       };
 
     case 'slack_get_users':
       const usersData = await slackClient.getUsers(args?.limit || 100);
-      
       const userList = usersData.members
         .filter(user => !user.deleted && !user.is_bot)
         .map(user => {
-          const status = user.presence === 'active' ? '🟢' : '⚫';
           const profile = user.profile || {};
-          const title = profile.title ? ` - ${profile.title}` : '';
-          return `${status} **${profile.real_name || user.name}** (@${user.name})${title}`;
+          return `**${profile.real_name || user.name}** (@${user.name})`;
         })
         .join('\n');
       
       return {
-        content: [{
-          type: 'text',
-          text: `Users in workspace:\n\n${userList}`
-        }]
-      };
-
-    case 'slack_get_channel_info':
-      const channelInfo = await slackClient.getChannelInfo(args.channel);
-      const channel = channelInfo.channel;
-      
-      const info = [
-        `**Channel:** #${channel.name} (${channel.id})`,
-        `**Type:** ${channel.is_private ? 'Private' : 'Public'} channel`,
-        `**Members:** ${channel.num_members || 'Unknown'}`,
-        `**Created:** ${new Date(channel.created * 1000).toLocaleDateString()}`,
-        `**Purpose:** ${channel.purpose?.value || 'No purpose set'}`,
-        `**Topic:** ${channel.topic?.value || 'No topic set'}`
-      ].join('\n');
-      
-      return {
-        content: [{
-          type: 'text',
-          text: `Channel Information:\n\n${info}`
-        }]
+        content: [{ type: 'text', text: `Users in workspace:\n\n${userList}` }]
       };
 
     default:
@@ -1174,7 +874,6 @@ async function handleToolCall(name, args, slackClient) {
   }
 }
 
-// Cleanup on shutdown
 process.on('SIGTERM', () => {
   console.log('🛑 Server shutting down...');
   activeSessions.clear();
@@ -1185,8 +884,7 @@ app.listen(PORT, () => {
   console.log(`🚀 Slack MCP Server v2.0 running on port ${PORT}`);
   console.log(`📱 Connect at: https://your-domain.com/connect`);
   console.log(`🔗 MCP endpoint: https://your-domain.com/mcp`);
-  console.log(`🔐 OAuth discovery: https://your-domain.com/.well-known/oauth-authorization-server`);
-  console.log(`🔐 Pre-registered OAuth clients:`, Array.from(oauthClients.keys()));
-  console.log(`📊 Ready for Claude integration`);
+  console.log(`🔐 Pre-registered clients: ${Array.from(oauthClients.keys()).join(', ')}`);
   console.log(`💡 Use client_id: 'slack-mcp-claude-web' when adding to Claude`);
+  console.log(`📊 Ready for Claude integration`);
 });
