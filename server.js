@@ -102,16 +102,19 @@ app.get('/oauth/slack', (req, res) => {
   console.log('OAuth request - Redirect URI:', redirectUri);
   
   const state = crypto.randomBytes(16).toString('hex');
+  
+  // Updated scopes - these are the correct user token scopes
   const scopes = [
     'channels:history',
-    'channels:read', 
-    'channels:write',
+    'channels:read',
     'chat:write',
+    'groups:history',
     'groups:read',
-    'groups:write',
     'im:history',
+    'im:read',
     'im:write',
     'mpim:history',
+    'mpim:read',
     'search:read',
     'users:read'
   ].join(',');
