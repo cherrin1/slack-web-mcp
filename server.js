@@ -16,8 +16,10 @@ const port = process.env.PORT || 3000;
 // Environment variables
 const SLACK_CLIENT_ID = process.env.SLACK_CLIENT_ID;
 const SLACK_CLIENT_SECRET = process.env.SLACK_CLIENT_SECRET;
-const SLACK_REDIRECT_URI = process.env.SLACK_REDIRECT_URI;
 const MCP_SECRET = process.env.MCP_SECRET || crypto.randomBytes(32).toString('hex');
+
+// Base URL will be determined at runtime
+let BASE_URL = process.env.BASE_URL || null;
 
 // Validate required environment variables
 if (!SLACK_CLIENT_ID || !SLACK_CLIENT_SECRET) {
@@ -28,7 +30,7 @@ if (!SLACK_CLIENT_ID || !SLACK_CLIENT_SECRET) {
 console.log('✅ Environment variables loaded:');
 console.log('- SLACK_CLIENT_ID:', SLACK_CLIENT_ID ? '✓' : '✗');
 console.log('- SLACK_CLIENT_SECRET:', SLACK_CLIENT_SECRET ? '✓' : '✗');
-console.log('- SLACK_REDIRECT_URI:', SLACK_REDIRECT_URI);
+console.log('- BASE_URL:', BASE_URL || 'Will be determined at runtime');
 console.log('- MCP_SECRET:', MCP_SECRET ? '✓' : '✗');
 
 // In-memory storage (replace with database in production)
@@ -37,8 +39,68 @@ const userTokens = new Map();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Helper function to get base URL
+function getBaseUrl(req) {
+  if (BASE_URL) {
+    return BASE_URL;
+  }
+  
+  // For Azure Container Apps, use the host header
+  const protocol = req.get('x-forwarded-proto') || 'https';
+  const host = req.get('host');
+  return `${protocol}://${host}`;
+}
+
+// MCP Authorization endpoint for Claude
+app.get('/authorize', (req, res) => {
+  const { state, redirect_uri } = req.query;
+  
+  if (!state || !redirect_uri) {
+    return res.status(400).json({ 
+      error: 'Missing required parameters', 
+      details: 'state and redirect_uri are required' 
+    });
+  }
+  
+  // For now, we'll redirect to Slack OAuth
+  // In a production setup, you might want to show a page explaining the flow
+  const baseUrl = getBaseUrl(req);
+  const slackOAuthUrl = `${baseUrl}/oauth/slack?state=${encodeURIComponent(state)}&redirect_uri=${encodeURIComponent(redirect_uri)}`;
+  
+  res.redirect(slackOAuthUrl);
+});
+
+// MCP Token endpoint for Claude
+app.post('/token', express.json(), (req, res) => {
+  const { code, state } = req.body;
+  
+  if (!code) {
+    return res.status(400).json({ 
+      error: 'invalid_request', 
+      error_description: 'Missing authorization code' 
+    });
+  }
+  
+  // In a real implementation, you'd validate the code and return an access token
+  // For now, we'll return a simple token that includes the MCP secret
+  const accessToken = `mcp_${MCP_SECRET}_${Date.now()}`;
+  
+  res.json({
+    access_token: accessToken,
+    token_type: 'Bearer',
+    expires_in: 3600,
+    scope: 'slack:read slack:write'
+  });
+});
+
 // OAuth endpoints
 app.get('/oauth/slack', (req, res) => {
+  const baseUrl = getBaseUrl(req);
+  const redirectUri = `${baseUrl}/oauth/callback`;
+  
+  console.log('OAuth request - Base URL:', baseUrl);
+  console.log('OAuth request - Redirect URI:', redirectUri);
+  
   const state = crypto.randomBytes(16).toString('hex');
   const scopes = [
     'channels:history',
@@ -54,12 +116,15 @@ app.get('/oauth/slack', (req, res) => {
     'users:read'
   ].join(',');
   
-  const authUrl = `https://slack.com/oauth/v2/authorize?client_id=${SLACK_CLIENT_ID}&scope=${scopes}&state=${state}&redirect_uri=${encodeURIComponent(SLACK_REDIRECT_URI)}`;
+  const authUrl = `https://slack.com/oauth/v2/authorize?client_id=${SLACK_CLIENT_ID}&scope=${scopes}&state=${state}&redirect_uri=${encodeURIComponent(redirectUri)}`;
   
   res.redirect(authUrl);
 });
 
 app.get('/oauth/callback', async (req, res) => {
+  const baseUrl = getBaseUrl(req);
+  const redirectUri = `${baseUrl}/oauth/callback`;
+  
   const { code, state, error } = req.query;
   
   if (error) {
@@ -80,7 +145,7 @@ app.get('/oauth/callback', async (req, res) => {
         client_id: SLACK_CLIENT_ID,
         client_secret: SLACK_CLIENT_SECRET,
         code: code,
-        redirect_uri: SLACK_REDIRECT_URI,
+        redirect_uri: redirectUri, // Use the same redirect URI
       }),
     });
     
@@ -108,7 +173,8 @@ app.get('/oauth/callback', async (req, res) => {
       success: true, 
       message: 'Successfully authenticated with Slack',
       team: data.team.name,
-      user: data.authed_user.name || 'Unknown'
+      user: data.authed_user.name || 'Unknown',
+      redirect_uri_used: redirectUri
     });
     
   } catch (error) {
@@ -120,6 +186,108 @@ app.get('/oauth/callback', async (req, res) => {
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+});
+
+// MCP Server discovery endpoint
+app.get('/.well-known/mcp', (req, res) => {
+  const baseUrl = getBaseUrl(req);
+  
+  res.json({
+    mcp_version: "1.0",
+    server: {
+      name: "slack-user-token-server",
+      version: "1.0.0"
+    },
+    endpoints: {
+      authorize: `${baseUrl}/authorize`,
+      token: `${baseUrl}/token`,
+      mcp: `${baseUrl}/mcp`
+    },
+    capabilities: {
+      tools: true,
+      resources: false,
+      prompts: false
+    }
+  });
+});
+
+// MCP endpoint for Claude to connect to
+app.post('/mcp', express.json(), async (req, res) => {
+  const authHeader = req.headers.authorization;
+  
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Missing or invalid authorization header' });
+  }
+  
+  const token = authHeader.substring(7);
+  
+  // Validate the token (in production, you'd verify this properly)
+  if (!token.startsWith('mcp_')) {
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+  
+  // Handle MCP protocol messages
+  try {
+    const { method, params } = req.body;
+    
+    // This is a simplified MCP handler - in production you'd use the full MCP SDK
+    switch (method) {
+      case 'tools/list':
+        return res.json({
+          tools: [
+            {
+              name: "slack_send_message",
+              description: "Send a message to a Slack channel or user"
+            },
+            {
+              name: "slack_get_channels", 
+              description: "Get list of channels"
+            },
+            {
+              name: "slack_get_messages",
+              description: "Get messages from a channel"
+            }
+          ]
+        });
+        
+      case 'tools/call':
+        // Handle tool calls - you'd implement the actual Slack API calls here
+        return res.json({
+          content: [
+            {
+              type: "text",
+              text: "Tool call received - implement actual Slack API integration"
+            }
+          ]
+        });
+        
+      default:
+        return res.status(400).json({ error: 'Unknown method' });
+    }
+  } catch (error) {
+    console.error('MCP error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Info endpoint - shows current redirect URI
+app.get('/info', (req, res) => {
+  const baseUrl = getBaseUrl(req);
+  const redirectUri = `${baseUrl}/oauth/callback`;
+  
+  res.json({
+    app_name: 'Slack MCP Server',
+    version: '1.0.0',
+    base_url: baseUrl,
+    oauth_url: `${baseUrl}/oauth/slack`,
+    redirect_uri: redirectUri,
+    health_url: `${baseUrl}/health`,
+    instructions: {
+      step1: 'Add this redirect URI to your Slack app settings',
+      step2: `Visit ${baseUrl}/oauth/slack to authenticate`,
+      step3: 'Use the MCP server with Claude'
+    }
+  });
 });
 
 // MCP Server setup
@@ -439,8 +607,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 // Start the Express server
 app.listen(port, () => {
   console.log(`Slack MCP Server listening on port ${port}`);
-  console.log(`OAuth URL: http://localhost:${port}/oauth/slack`);
   console.log(`Health check: http://localhost:${port}/health`);
+  console.log(`OAuth URL: http://localhost:${port}/oauth/slack`);
+  console.log('');
+  console.log('🚀 Server ready! When deployed, the OAuth URL will be:');
+  console.log('   https://your-app-name.region.azurecontainerapps.io/oauth/slack');
+  console.log('');
+  console.log('📝 Remember to add this redirect URI to your Slack app:');
+  console.log('   https://your-app-name.region.azurecontainerapps.io/oauth/callback');
 });
 
 // Start the MCP server
