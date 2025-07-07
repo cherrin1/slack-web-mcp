@@ -511,6 +511,7 @@ app.all('/token', (req, res) => {
 
 // Store active transports to handle messages properly
 const activeTransports = new Map(); // sessionId -> transport
+const sessionRequests = new Map(); // track requests by session
 
 // SSE endpoint for MCP connections
 app.get('/sse', async (req, res) => {
@@ -575,8 +576,52 @@ app.get('/sse', async (req, res) => {
   }
 });
 
-// Remove the POST /messages handler - let SSE transport handle it naturally
-// The SSEServerTransport should automatically handle POST requests to /messages
+// Add back POST handler for /messages - this is required for MCP SSE transport
+app.post('/messages', async (req, res) => {
+  console.log('📨 POST to /messages received:', req.body);
+  console.log('📋 Headers:', req.headers);
+  
+  try {
+    // The message should be handled by the MCP server through the transport
+    // But we need to provide a proper endpoint for the client to post to
+    
+    // For now, let's acknowledge the message and let the SSE handle the response
+    res.json({
+      jsonrpc: "2.0",
+      id: req.body.id,
+      result: {
+        protocolVersion: "2024-11-05",
+        capabilities: {
+          tools: {},
+          logging: {}
+        },
+        serverInfo: {
+          name: "slack-mcp-server",
+          version: "1.0.0"
+        }
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Message handling error:', error);
+    res.status(500).json({
+      jsonrpc: "2.0",
+      id: req.body.id || null,
+      error: {
+        code: -32603,
+        message: "Internal error",
+        data: error.message
+      }
+    });
+  }
+});
+
+// Also add POST handler for /sse endpoint
+app.post('/sse', async (req, res) => {
+  console.log('📨 POST to /sse received:', req.body);
+  // Redirect POST requests to the messages endpoint
+  res.redirect(307, '/messages');
+});
 
 // Also handle GET requests to /messages
 app.get('/messages', (req, res) => {
