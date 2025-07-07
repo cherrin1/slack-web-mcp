@@ -23,6 +23,8 @@ app.use(express.urlencoded({ extended: true }));
 // In-memory storage
 const registeredTokens = new Map(); // token -> userInfo
 const activeSessions = new Map(); // sessionId -> session info
+const oauthClients = new Map(); // clientId -> client info
+const authorizationCodes = new Map(); // code -> token info
 
 // Enhanced SlackClient
 class SlackClient {
@@ -104,7 +106,7 @@ class SlackClient {
   }
 }
 
-// Enhanced authentication
+// Enhanced authentication - support both Bearer tokens and OAuth tokens
 async function authenticateRequest(req) {
   const authHeader = req.headers.authorization;
   if (!authHeader) {
@@ -113,21 +115,225 @@ async function authenticateRequest(req) {
   }
 
   const token = authHeader.replace('Bearer ', '');
-  if (!token || !token.startsWith('xoxp-')) {
-    console.log('🔍 Invalid token format:', token.substring(0, 10) + '...');
-    return null;
+  
+  // Check if it's a registered Slack token
+  if (token.startsWith('xoxp-')) {
+    const userInfo = registeredTokens.get(token);
+    if (!userInfo) {
+      console.log('🔍 Slack token not found in registered tokens');
+      return null;
+    }
+    console.log('✅ Slack token authenticated for user:', userInfo.userName || 'Unknown');
+    return { token, userInfo, type: 'slack' };
+  }
+  
+  // Check if it's an OAuth access token
+  for (const [slackToken, userInfo] of registeredTokens.entries()) {
+    if (userInfo.accessTokens && userInfo.accessTokens.includes(token)) {
+      console.log('✅ OAuth token authenticated for user:', userInfo.userName || 'Unknown');
+      return { token: slackToken, userInfo, type: 'oauth' };
+    }
   }
 
-  const userInfo = registeredTokens.get(token);
-  if (!userInfo) {
-    console.log('🔍 Token not found in registered tokens');
-    console.log('🔍 Available tokens:', Array.from(registeredTokens.keys()).map(t => t.substring(0, 15) + '...'));
-    return null;
-  }
-
-  console.log('✅ Token authenticated for user:', userInfo.userName || 'Unknown');
-  return { token, userInfo };
+  console.log('🔍 Token not recognized:', token.substring(0, 10) + '...');
+  return null;
 }
+
+// OAuth Discovery endpoint (required for MCP)
+app.get('/.well-known/oauth-authorization-server', (req, res) => {
+  const baseUrl = `https://${req.get('host')}`;
+  res.json({
+    issuer: baseUrl,
+    authorization_endpoint: `${baseUrl}/oauth/authorize`,
+    token_endpoint: `${baseUrl}/oauth/token`,
+    registration_endpoint: `${baseUrl}/oauth/register`,
+    scopes_supported: ['mcp'],
+    response_types_supported: ['code'],
+    grant_types_supported: ['authorization_code'],
+    code_challenge_methods_supported: ['S256', 'plain'],
+    token_endpoint_auth_methods_supported: ['client_secret_post', 'none']
+  });
+});
+
+// Dynamic Client Registration (required for Claude MCP)
+app.post('/oauth/register', (req, res) => {
+  console.log('🔐 OAuth client registration request:', req.body);
+  
+  const { client_name, redirect_uris } = req.body;
+  
+  if (!redirect_uris || !Array.isArray(redirect_uris) || redirect_uris.length === 0) {
+    return res.status(400).json({
+      error: 'invalid_request',
+      error_description: 'redirect_uris is required and must be an array'
+    });
+  }
+
+  const clientId = `mcp_client_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+  const clientSecret = `mcp_secret_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+  
+  const clientInfo = {
+    client_id: clientId,
+    client_secret: clientSecret,
+    client_name: client_name || 'Claude MCP Client',
+    redirect_uris: redirect_uris,
+    grant_types: ['authorization_code'],
+    response_types: ['code'],
+    scope: 'mcp',
+    created_at: new Date().toISOString()
+  };
+  
+  oauthClients.set(clientId, clientInfo);
+  
+  console.log('✅ OAuth client registered:', clientId);
+  
+  res.json({
+    client_id: clientId,
+    client_secret: clientSecret,
+    client_name: clientInfo.client_name,
+    redirect_uris: clientInfo.redirect_uris,
+    grant_types: clientInfo.grant_types,
+    response_types: clientInfo.response_types,
+    scope: clientInfo.scope,
+    client_id_issued_at: Math.floor(new Date().getTime() / 1000),
+    client_secret_expires_at: 0
+  });
+});
+
+// OAuth Authorization endpoint
+app.get('/oauth/authorize', (req, res) => {
+  console.log('🔐 OAuth authorize request:', req.query);
+  
+  const { 
+    client_id, 
+    redirect_uri, 
+    response_type, 
+    scope, 
+    state, 
+    code_challenge, 
+    code_challenge_method 
+  } = req.query;
+  
+  // Validate client
+  const client = oauthClients.get(client_id);
+  if (!client) {
+    return res.status(400).json({
+      error: 'invalid_client',
+      error_description: 'Invalid client_id'
+    });
+  }
+  
+  // Validate redirect URI
+  if (!client.redirect_uris.includes(redirect_uri)) {
+    return res.status(400).json({
+      error: 'invalid_request',
+      error_description: 'Invalid redirect_uri'
+    });
+  }
+  
+  // Generate authorization code
+  const authCode = `mcp_code_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+  const codeInfo = {
+    client_id,
+    redirect_uri,
+    scope: scope || 'mcp',
+    state,
+    code_challenge,
+    code_challenge_method,
+    created_at: new Date(),
+    expires_at: new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
+  };
+  
+  authorizationCodes.set(authCode, codeInfo);
+  
+  // Auto-approve for registered users or redirect to connect page
+  if (registeredTokens.size > 0) {
+    // Auto-approve with the first registered token
+    const [firstToken, userInfo] = Array.from(registeredTokens.entries())[0];
+    codeInfo.approved = true;
+    codeInfo.user_token = firstToken;
+    
+    console.log('✅ Auto-approved OAuth for user:', userInfo.userName);
+    
+    // Redirect back to Claude
+    const redirectUrl = new URL(redirect_uri);
+    redirectUrl.searchParams.set('code', authCode);
+    if (state) redirectUrl.searchParams.set('state', state);
+    
+    return res.redirect(redirectUrl.toString());
+  }
+  
+  // Redirect to connect page for token registration
+  const connectUrl = new URL(`https://${req.get('host')}/connect`);
+  connectUrl.searchParams.set('oauth', 'true');
+  connectUrl.searchParams.set('client_id', client_id);
+  connectUrl.searchParams.set('redirect_uri', redirect_uri);
+  connectUrl.searchParams.set('code', authCode);
+  if (state) connectUrl.searchParams.set('state', state);
+  
+  res.redirect(connectUrl.toString());
+});
+
+// OAuth Token endpoint
+app.post('/oauth/token', (req, res) => {
+  console.log('🔐 OAuth token request:', req.body);
+  
+  const { grant_type, code, client_id, client_secret, redirect_uri } = req.body;
+  
+  if (grant_type !== 'authorization_code') {
+    return res.status(400).json({
+      error: 'unsupported_grant_type',
+      error_description: 'Only authorization_code grant type is supported'
+    });
+  }
+  
+  const codeInfo = authorizationCodes.get(code);
+  if (!codeInfo) {
+    return res.status(400).json({
+      error: 'invalid_grant',
+      error_description: 'Invalid authorization code'
+    });
+  }
+  
+  // Check if code is expired
+  if (new Date() > codeInfo.expires_at) {
+    authorizationCodes.delete(code);
+    return res.status(400).json({
+      error: 'invalid_grant',
+      error_description: 'Authorization code expired'
+    });
+  }
+  
+  // Validate client
+  const client = oauthClients.get(client_id);
+  if (!client || (client.client_secret && client.client_secret !== client_secret)) {
+    return res.status(400).json({
+      error: 'invalid_client',
+      error_description: 'Invalid client credentials'
+    });
+  }
+  
+  // Generate access token
+  const accessToken = `mcp_access_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+  
+  // Store access token with user info
+  if (codeInfo.user_token && registeredTokens.has(codeInfo.user_token)) {
+    const userInfo = registeredTokens.get(codeInfo.user_token);
+    if (!userInfo.accessTokens) userInfo.accessTokens = [];
+    userInfo.accessTokens.push(accessToken);
+  }
+  
+  // Clean up authorization code
+  authorizationCodes.delete(code);
+  
+  console.log('✅ OAuth access token issued:', accessToken.substring(0, 20) + '...');
+  
+  res.json({
+    access_token: accessToken,
+    token_type: 'Bearer',
+    expires_in: 3600,
+    scope: codeInfo.scope || 'mcp'
+  });
+});
 
 // Server info endpoint
 app.get('/', (req, res) => {
@@ -146,7 +352,13 @@ app.get('/', (req, res) => {
     endpoints: {
       mcp: "/mcp",
       connect: "/connect",
-      health: "/health"
+      health: "/health",
+      oauth: {
+        discovery: "/.well-known/oauth-authorization-server",
+        register: "/oauth/register",
+        authorize: "/oauth/authorize",
+        token: "/oauth/token"
+      }
     }
   });
 });
@@ -157,13 +369,14 @@ app.get('/health', (req, res) => {
     status: "healthy",
     timestamp: new Date().toISOString(),
     connections: activeSessions.size,
-    registeredTokens: registeredTokens.size
+    registeredTokens: registeredTokens.size,
+    oauthClients: oauthClients.size
   });
 });
 
 // Enhanced registration
 app.post('/register', async (req, res) => {
-  const { slackToken, userInfo = {} } = req.body;
+  const { slackToken, userInfo = {}, oauth_code } = req.body;
   
   if (!slackToken || !slackToken.startsWith('xoxp-')) {
     return res.status(400).json({ 
@@ -187,6 +400,14 @@ app.post('/register', async (req, res) => {
     
     registeredTokens.set(slackToken, enrichedUserInfo);
     
+    // If there's an OAuth code, approve it
+    if (oauth_code && authorizationCodes.has(oauth_code)) {
+      const codeInfo = authorizationCodes.get(oauth_code);
+      codeInfo.approved = true;
+      codeInfo.user_token = slackToken;
+      console.log('✅ OAuth code approved for registration');
+    }
+    
     console.log('✅ User registered successfully:', enrichedUserInfo.userName);
     return res.json({ 
       success: true, 
@@ -206,6 +427,8 @@ app.post('/register', async (req, res) => {
 // Connect page
 app.get('/connect', (req, res) => {
   const serverUrl = `https://${req.get('host')}`;
+  const { oauth, client_id, redirect_uri, code, state } = req.query;
+  const isOAuth = oauth === 'true';
   
   const html = `<!DOCTYPE html>
 <html>
@@ -228,6 +451,10 @@ app.get('/connect', (req, res) => {
         .subtitle { color: #718096; text-align: center; margin-bottom: 32px; }
         .info-box { 
             background: #f7fafc; border: 1px solid #e2e8f0; border-radius: 8px; 
+            padding: 16px; margin-bottom: 24px; font-size: 14px; line-height: 1.5;
+        }
+        .oauth-box {
+            background: #e6f3ff; border: 1px solid #3182ce; border-radius: 8px;
             padding: 16px; margin-bottom: 24px; font-size: 14px; line-height: 1.5;
         }
         .form-group { margin-bottom: 20px; }
@@ -270,6 +497,13 @@ app.get('/connect', (req, res) => {
         <h1>🚀 Connect Slack to Claude</h1>
         <p class="subtitle">Integrate your Slack workspace with Claude's AI assistant</p>
         
+        ${isOAuth ? `
+        <div class="oauth-box">
+            <strong>🔐 OAuth Authentication</strong><br>
+            Claude is requesting access to your Slack workspace. Please register your token to complete the connection.
+        </div>
+        ` : ''}
+        
         <div class="step">
             <div><span class="step-number">1</span><strong>MCP Server URL</strong></div>
             <div class="info-box">
@@ -297,13 +531,18 @@ app.get('/connect', (req, res) => {
                     <label for="name">Your Name (Optional)</label>
                     <input type="text" id="name" placeholder="John Doe">
                 </div>
-                <button type="submit" id="submitBtn">Connect to Claude</button>
+                <button type="submit" id="submitBtn">${isOAuth ? 'Complete OAuth Connection' : 'Connect to Claude'}</button>
             </form>
             <div class="status" id="status"></div>
         </div>
     </div>
 
     <script>
+        const isOAuth = ${isOAuth};
+        const oauthCode = '${code || ''}';
+        const redirectUri = '${redirect_uri || ''}';
+        const state = '${state || ''}';
+        
         document.getElementById('registrationForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             
@@ -327,7 +566,8 @@ app.get('/connect', (req, res) => {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
                         slackToken: token, 
-                        userInfo: { name: name || 'User' } 
+                        userInfo: { name: name || 'User' },
+                        oauth_code: oauthCode || null
                     })
                 });
                 
@@ -335,18 +575,30 @@ app.get('/connect', (req, res) => {
                 
                 if (data.success) {
                     showStatus('success', 
-                        \`✅ Successfully connected! Welcome \${data.userInfo.userName} from \${data.userInfo.teamName}. ` +
-                        `Your Slack workspace is now ready to use with Claude.\`);
+                        \`✅ Successfully connected! Welcome \${data.userInfo.userName} from \${data.userInfo.teamName}.\`);
+                    
+                    if (isOAuth && redirectUri) {
+                        showStatus('success', '🔄 Redirecting back to Claude...');
+                        setTimeout(() => {
+                            const returnUrl = new URL(redirectUri);
+                            returnUrl.searchParams.set('code', oauthCode);
+                            if (state) returnUrl.searchParams.set('state', state);
+                            window.location.href = returnUrl.toString();
+                        }, 2000);
+                    } else {
+                        showStatus('success', 'Your Slack workspace is now ready to use with Claude!');
+                    }
+                    
                     document.getElementById('registrationForm').style.display = 'none';
                 } else {
                     showStatus('error', '❌ ' + (data.error || 'Registration failed'));
                     submitBtn.disabled = false;
-                    submitBtn.textContent = 'Connect to Claude';
+                    submitBtn.textContent = isOAuth ? 'Complete OAuth Connection' : 'Connect to Claude';
                 }
             } catch (error) {
                 showStatus('error', '❌ Network error: ' + error.message);
                 submitBtn.disabled = false;
-                submitBtn.textContent = 'Connect to Claude';
+                submitBtn.textContent = isOAuth ? 'Complete OAuth Connection' : 'Connect to Claude';
             }
         });
 
@@ -407,15 +659,6 @@ app.get('/mcp', async (req, res) => {
   // Send initial endpoint message as required by MCP SSE spec
   res.write(`event: endpoint\n`);
   res.write(`data: /messages\n\n`);
-
-  // Send initial ready notification
-  const readyMessage = {
-    jsonrpc: '2.0',
-    method: 'notifications/initialized',
-    params: {}
-  };
-  res.write(`event: message\n`);
-  res.write(`data: ${JSON.stringify(readyMessage)}\n\n`);
 
   // Keep connection alive with ping events
   const keepAlive = setInterval(() => {
@@ -643,7 +886,7 @@ app.post('/mcp', async (req, res) => {
   
   console.log(`🔧 MCP HTTP Request: ${method}`);
   
-  // For HTTP transport, authenticate on each request
+  // For HTTP transport, authenticate on each request (except for discovery)
   const auth = await authenticateRequest(req);
   if (!auth && method !== 'initialize' && method !== 'tools/list') {
     return res.status(401).json({
@@ -955,5 +1198,6 @@ app.listen(PORT, () => {
   console.log(`🚀 Slack MCP Server v2.0 running on port ${PORT}`);
   console.log(`📱 Connect at: https://your-domain.com/connect`);
   console.log(`🔗 MCP endpoint: https://your-domain.com/mcp`);
+  console.log(`🔐 OAuth discovery: https://your-domain.com/.well-known/oauth-authorization-server`);
   console.log(`📊 Ready for Claude integration`);
 });
