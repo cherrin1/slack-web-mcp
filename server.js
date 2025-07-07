@@ -9,6 +9,11 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// OAuth configuration - set these in Azure environment variables or use defaults
+const SLACK_CLIENT_ID = process.env.SLACK_CLIENT_ID || 'slack-mcp-claude-web';
+const SLACK_CLIENT_SECRET = process.env.SLACK_CLIENT_SECRET || 'not-configured';
+const REDIRECT_URI = process.env.REDIRECT_URI || `https://${process.env.WEBSITE_HOSTNAME || 'your-domain.com'}/authorize`;
+
 // Enhanced CORS for Claude
 app.use(cors({
   origin: ['https://claude.ai', 'https://playground.ai.cloudflare.com', '*'],
@@ -20,9 +25,10 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// In-memory token storage per session
+// In-memory storage
 const sessionTokens = new Map(); // sessionId -> slackToken
 const activeSessions = new Map(); // sessionId -> session info
+const pendingAuth = new Map(); // state -> sessionId (for OAuth)
 
 // Slack API client
 class SlackClient {
@@ -96,6 +102,33 @@ class SlackClient {
   }
 }
 
+// OAuth helper function
+async function exchangeCodeForToken(code) {
+  if (!SLACK_CLIENT_SECRET || SLACK_CLIENT_SECRET === 'not-configured') {
+    throw new Error('OAuth not properly configured - use manual token method instead');
+  }
+
+  const response = await fetch('https://slack.com/api/oauth.v2.access', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams({
+      client_id: SLACK_CLIENT_ID,
+      client_secret: SLACK_CLIENT_SECRET,
+      code: code,
+      redirect_uri: REDIRECT_URI,
+    }),
+  });
+
+  const data = await response.json();
+  if (!data.ok) {
+    throw new Error(`OAuth error: ${data.error}`);
+  }
+
+  return data.authed_user.access_token;
+}
+
 // Create MCP server instance
 const mcpServer = new Server(
   {
@@ -115,7 +148,7 @@ mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
     tools: [
       {
         name: 'slack_setup_token',
-        description: 'Setup your Slack token for this session. Get your token from https://api.slack.com/custom-integrations/legacy-tokens',
+        description: 'Setup your Slack token manually. Get your token from https://api.slack.com/custom-integrations/legacy-tokens',
         inputSchema: {
           type: 'object',
           properties: {
@@ -125,6 +158,14 @@ mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
             }
           },
           required: ['token']
+        }
+      },
+      {
+        name: 'slack_get_auth_url',
+        description: 'Get a manual authentication URL if OAuth is not working. This will give you a link to authorize manually.',
+        inputSchema: {
+          type: 'object',
+          properties: {}
         }
       },
       {
@@ -228,7 +269,7 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     throw new Error('No session ID found. Please establish a connection first.');
   }
 
-  // Handle token setup
+  // Handle manual token setup
   if (name === 'slack_setup_token') {
     if (!args.token || !args.token.startsWith('xoxp-')) {
       return {
@@ -248,12 +289,12 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       // Store token for this session
       sessionTokens.set(sessionId, args.token);
       
-      console.log('✅ Token setup for session:', sessionId, 'user:', authTest.user);
+      console.log('✅ Manual token setup for session:', sessionId, 'user:', authTest.user);
       
       return {
         content: [{
           type: 'text',
-          text: `✅ Successfully connected to Slack!\n\n**User:** ${authTest.user}\n**Team:** ${authTest.team}\n\nYou can now use other Slack tools like:\n- slack_get_channels\n- slack_send_message\n- slack_get_channel_history\n- slack_get_users`
+          text: `✅ Successfully connected to Slack!\n\n**User:** ${authTest.user}\n**Team:** ${authTest.team}\n**Method:** Manual token\n\nYou can now use other Slack tools like:\n- slack_get_channels\n- slack_send_message\n- slack_get_channel_history\n- slack_get_users`
         }]
       };
     } catch (error) {
@@ -267,13 +308,26 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     }
   }
 
+  // Handle auth URL request
+  if (name === 'slack_get_auth_url') {
+    const serverUrl = process.env.WEBSITE_HOSTNAME ? `https://${process.env.WEBSITE_HOSTNAME}` : 'https://your-domain.com';
+    const authUrl = `${serverUrl}/auth?session=${sessionId}`;
+    
+    return {
+      content: [{
+        type: 'text',
+        text: `🔗 **Manual Authentication URL:**\n\n${authUrl}\n\n**Instructions:**\n1. Click the link above\n2. Enter your Slack token on the page\n3. Come back to Claude and use Slack tools\n\n**Alternative:** Use the **slack_setup_token** tool directly in Claude with your token from: https://api.slack.com/custom-integrations/legacy-tokens`
+      }]
+    };
+  }
+
   // For all other tools, check if token is set
   const slackToken = sessionTokens.get(sessionId);
   if (!slackToken) {
     return {
       content: [{
         type: 'text',
-        text: `❌ No Slack token configured for this session.\n\nTo use ${name}, you need to set up your Slack token first.\n\n**Option 1: Use the setup tool**\nRun the **slack_setup_token** tool with your Slack user token.\n\n**Option 2: Get your token**\nVisit: https://api.slack.com/custom-integrations/legacy-tokens\n\nThen come back and use slack_setup_token with your token.`
+        text: `❌ No Slack token configured for this session.\n\n**Choose one method to authenticate:**\n\n**Method 1: Direct token (Recommended)**\nUse the **slack_setup_token** tool with your Slack user token.\n\n**Method 2: Manual auth page**\nUse the **slack_get_auth_url** tool to get a link.\n\n**Get your token from:** https://api.slack.com/custom-integrations/legacy-tokens`
       }]
     };
   }
@@ -305,7 +359,6 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       case 'slack_get_channel_history': {
         const history = await slackClient.getChannelHistory(args.channel, args?.limit || 20);
 
-        // Get user info for better formatting
         const userIds = [...new Set(history.messages.map(msg => msg.user).filter(Boolean))];
         const users = new Map();
 
@@ -409,20 +462,422 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
   }
 });
 
-// ONLY essential endpoints - NO OAuth routes
+// OAuth discovery endpoint for Claude
+app.get('/.well-known/oauth-authorization-server', (req, res) => {
+  console.log('📋 OAuth discovery requested');
+  const serverUrl = `https://${req.get('host')}`;
+  
+  res.json({
+    issuer: serverUrl,
+    authorization_endpoint: `${serverUrl}/authorize`,
+    token_endpoint: `${serverUrl}/token`,
+    response_types_supported: ['code'],
+    grant_types_supported: ['authorization_code'],
+    code_challenge_methods_supported: ['S256'],
+    scopes_supported: ['claudeai']
+  });
+});
+
+// OAuth authorization endpoint
+app.get('/authorize', async (req, res) => {
+  const { client_id, redirect_uri, state, code_challenge, scope } = req.query;
+  
+  console.log('🔐 OAuth authorize request:', { client_id, redirect_uri, state });
+  
+  // Store the state for later use
+  if (state) {
+    pendingAuth.set(state, { redirect_uri, code_challenge });
+  }
+  
+  // Manual token input page
+  const serverUrl = `https://${req.get('host')}`;
+  
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+    <title>Connect Slack to Claude</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin: 0; padding: 20px; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+        }
+        .container { 
+            background: white; padding: 40px; border-radius: 16px; 
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1); max-width: 500px; width: 100%;
+        }
+        h1 { color: #2d3748; margin-bottom: 8px; font-size: 24px; text-align: center; }
+        .subtitle { color: #718096; text-align: center; margin-bottom: 24px; font-size: 14px; }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; margin-bottom: 8px; font-weight: 600; color: #2d3748; }
+        input { 
+            width: 100%; padding: 12px; border: 2px solid #e2e8f0; border-radius: 8px; 
+            font-size: 16px; transition: border-color 0.2s; box-sizing: border-box;
+        }
+        input:focus { outline: none; border-color: #667eea; }
+        button { 
+            width: 100%; background: #667eea; color: white; padding: 14px; 
+            border: none; border-radius: 8px; font-size: 16px; font-weight: 600; 
+            cursor: pointer; transition: background-color 0.2s;
+        }
+        button:hover { background: #5a67d8; }
+        button:disabled { background: #a0aec0; cursor: not-allowed; }
+        .info { 
+            background: #f7fafc; border: 1px solid #e2e8f0; border-radius: 8px; 
+            padding: 12px; margin-bottom: 16px; font-size: 14px;
+        }
+        .status { 
+            margin-top: 20px; padding: 12px; border-radius: 8px; display: none;
+            font-weight: 500;
+        }
+        .success { background: #f0fff4; color: #22543d; border: 1px solid #68d391; }
+        .error { background: #fed7d7; color: #c53030; border: 1px solid #fc8181; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔗 Connect Your Slack Account</h1>
+        <p class="subtitle">Enter your Slack token to connect to Claude</p>
+        
+        <div class="info">
+            <strong>Get your Slack token:</strong><br>
+            Visit <a href="https://api.slack.com/custom-integrations/legacy-tokens" target="_blank">Slack Legacy Tokens</a> 
+            and generate a token for your workspace.
+        </div>
+        
+        <form id="authForm">
+            <div class="form-group">
+                <label for="token">Slack User Token *</label>
+                <input type="text" id="token" placeholder="xoxp-your-slack-token-here" required>
+            </div>
+            <input type="hidden" id="state" value="${state || ''}">
+            <input type="hidden" id="redirectUri" value="${redirect_uri || ''}">
+            <button type="submit" id="submitBtn">Connect to Claude</button>
+        </form>
+        <div class="status" id="status"></div>
+    </div>
+
+    <script>
+        document.getElementById('authForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const status = document.getElementById('status');
+            const submitBtn = document.getElementById('submitBtn');
+            const token = document.getElementById('token').value.trim();
+            const state = document.getElementById('state').value;
+            const redirectUri = document.getElementById('redirectUri').value;
+            
+            if (!token.startsWith('xoxp-')) {
+                showStatus('error', 'Invalid token format. Must start with xoxp-');
+                return;
+            }
+            
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Connecting...';
+            
+            try {
+                const response = await fetch('/token', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        token: token,
+                        state: state
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    showStatus('success', 'Successfully connected! Redirecting to Claude...');
+                    
+                    // Redirect back to Claude with success
+                    if (redirectUri && data.code) {
+                        setTimeout(() => {
+                            window.location.href = \`\${redirectUri}?code=\${data.code}&state=\${state}\`;
+                        }, 1500);
+                    } else {
+                        setTimeout(() => {
+                            window.close();
+                        }, 2000);
+                    }
+                } else {
+                    showStatus('error', '❌ ' + (data.error || 'Connection failed'));
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Connect to Claude';
+                }
+            } catch (error) {
+                showStatus('error', '❌ Network error: ' + error.message);
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Connect to Claude';
+            }
+        });
+
+        function showStatus(type, message) {
+            const status = document.getElementById('status');
+            status.className = \`status \${type}\`;
+            status.textContent = message;
+            status.style.display = 'block';
+        }
+    </script>
+</body>
+</html>`;
+  
+  res.send(html);
+});
+
+// OAuth token endpoint
+app.post('/token', async (req, res) => {
+  const { code, state, token } = req.body;
+  
+  console.log('🎟️ Token request:', { hasCode: !!code, hasToken: !!token, state });
+  
+  try {
+    let slackToken;
+    let authTest;
+    
+    if (token) {
+      // Manual token flow
+      if (!token.startsWith('xoxp-')) {
+        return res.status(400).json({ 
+          success: false,
+          error: 'Invalid token format' 
+        });
+      }
+      
+      slackToken = token;
+      const slackClient = new SlackClient(slackToken);
+      authTest = await slackClient.testAuth();
+      
+      // Generate a temporary code for Claude
+      const tempCode = `manual_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+      
+      // Store token with temp code
+      sessionTokens.set(tempCode, slackToken);
+      
+      console.log('✅ Manual token authenticated:', authTest.user);
+      
+      return res.json({ 
+        success: true, 
+        code: tempCode,
+        user: authTest.user,
+        team: authTest.team
+      });
+    } else if (code) {
+      // OAuth code flow (if properly configured)
+      try {
+        slackToken = await exchangeCodeForToken(code);
+        const slackClient = new SlackClient(slackToken);
+        authTest = await slackClient.testAuth();
+        
+        console.log('✅ OAuth token exchanged:', authTest.user);
+        
+        return res.json({ 
+          access_token: slackToken,
+          token_type: 'Bearer',
+          scope: 'claudeai'
+        });
+      } catch (error) {
+        return res.status(400).json({ 
+          success: false,
+          error: 'OAuth not configured - use manual token method' 
+        });
+      }
+    }
+    
+    return res.status(400).json({ 
+      success: false,
+      error: 'No token or code provided' 
+    });
+    
+  } catch (error) {
+    console.error('❌ Token validation failed:', error.message);
+    return res.status(400).json({ 
+      success: false,
+      error: error.message 
+    });
+  }
+});
+
+// Manual auth page (alternative to OAuth)
+app.get('/auth', (req, res) => {
+  const sessionId = req.query.session;
+  
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+    <title>Manual Slack Authentication</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin: 0; padding: 20px; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+        }
+        .container { 
+            background: white; padding: 40px; border-radius: 16px; 
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1); max-width: 500px; width: 100%;
+        }
+        h1 { color: #2d3748; margin-bottom: 8px; font-size: 24px; text-align: center; }
+        .subtitle { color: #718096; text-align: center; margin-bottom: 24px; }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; margin-bottom: 8px; font-weight: 600; color: #2d3748; }
+        input { 
+            width: 100%; padding: 12px; border: 2px solid #e2e8f0; border-radius: 8px; 
+            font-size: 16px; transition: border-color 0.2s; box-sizing: border-box;
+        }
+        input:focus { outline: none; border-color: #667eea; }
+        button { 
+            width: 100%; background: #667eea; color: white; padding: 14px; 
+            border: none; border-radius: 8px; font-size: 16px; font-weight: 600; 
+            cursor: pointer; transition: background-color 0.2s;
+        }
+        button:hover { background: #5a67d8; }
+        .info { 
+            background: #f7fafc; border: 1px solid #e2e8f0; border-radius: 8px; 
+            padding: 12px; margin-bottom: 16px; font-size: 14px;
+        }
+        .status { 
+            margin-top: 20px; padding: 12px; border-radius: 8px; display: none;
+            font-weight: 500;
+        }
+        .success { background: #f0fff4; color: #22543d; border: 1px solid #68d391; }
+        .error { background: #fed7d7; color: #c53030; border: 1px solid #fc8181; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔗 Connect Your Slack Account</h1>
+        <p class="subtitle">Enter your Slack token to use with Claude</p>
+        
+        <div class="info">
+            <strong>Get your Slack token:</strong><br>
+            Visit <a href="https://api.slack.com/custom-integrations/legacy-tokens" target="_blank">Slack Legacy Tokens</a> 
+            and generate a token for your workspace.
+        </div>
+        
+        <form id="authForm">
+            <div class="form-group">
+                <label for="token">Slack User Token</label>
+                <input type="text" id="token" placeholder="xoxp-your-slack-token-here" required>
+            </div>
+            <input type="hidden" id="sessionId" value="${sessionId || ''}">
+            <button type="submit" id="submitBtn">Save Token</button>
+        </form>
+        <div class="status" id="status"></div>
+    </div>
+
+    <script>
+        document.getElementById('authForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const status = document.getElementById('status');
+            const submitBtn = document.getElementById('submitBtn');
+            const token = document.getElementById('token').value.trim();
+            const sessionId = document.getElementById('sessionId').value;
+            
+            if (!token.startsWith('xoxp-')) {
+                showStatus('error', 'Invalid token format. Must start with xoxp-');
+                return;
+            }
+            
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Saving...';
+            
+            try {
+                const response = await fetch('/manual-auth', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        token: token,
+                        sessionId: sessionId
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    showStatus('success', \`✅ Connected! Welcome \${data.user} from \${data.team}. You can now close this page and use Slack tools in Claude.\`);
+                } else {
+                    showStatus('error', '❌ ' + (data.error || 'Connection failed'));
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Save Token';
+                }
+            } catch (error) {
+                showStatus('error', '❌ Network error: ' + error.message);
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Save Token';
+            }
+        });
+
+        function showStatus(type, message) {
+            const status = document.getElementById('status');
+            status.className = \`status \${type}\`;
+            status.textContent = message;
+            status.style.display = 'block';
+        }
+    </script>
+</body>
+</html>`;
+  
+  res.send(html);
+});
+
+// Manual auth handler
+app.post('/manual-auth', async (req, res) => {
+  const { token, sessionId } = req.body;
+  
+  if (!token || !token.startsWith('xoxp-')) {
+    return res.status(400).json({ 
+      success: false,
+      error: 'Valid Slack token required (must start with xoxp-)' 
+    });
+  }
+  
+  try {
+    const slackClient = new SlackClient(token);
+    const authTest = await slackClient.testAuth();
+    
+    // Store token with session ID
+    if (sessionId) {
+      sessionTokens.set(sessionId, token);
+      console.log('✅ Manual auth for session:', sessionId, 'user:', authTest.user);
+    }
+    
+    return res.json({ 
+      success: true, 
+      message: 'Successfully connected with Slack',
+      user: authTest.user,
+      team: authTest.team
+    });
+  } catch (error) {
+    console.error('❌ Manual auth failed:', error.message);
+    return res.status(400).json({ 
+      success: false,
+      error: 'Authentication failed', 
+      message: error.message 
+    });
+  }
+});
+
+// Server info endpoint
 app.get('/', (req, res) => {
   res.json({
     name: "Slack MCP Server",
     version: "1.0.0",
-    description: "Connect your Slack workspace to Claude via MCP",
+    description: "Connect your Slack workspace to Claude via MCP - Supports OAuth and manual tokens",
     status: "ready",
     endpoints: {
       sse: "/sse",
-      health: "/health"
+      health: "/health",
+      auth: "/auth",
+      oauth_discovery: "/.well-known/oauth-authorization-server"
     },
     instructions: [
       "1. Add this server to Claude: your-domain.com/sse",
-      "2. Use 'slack_setup_token' tool with your Slack token",
+      "2. Authenticate via OAuth popup or use slack_setup_token tool",
       "3. Get token from: https://api.slack.com/custom-integrations/legacy-tokens"
     ]
   });
@@ -434,7 +889,8 @@ app.get('/health', (req, res) => {
     status: "healthy",
     timestamp: new Date().toISOString(),
     activeSessions: activeSessions.size,
-    sessionTokens: sessionTokens.size
+    sessionTokens: sessionTokens.size,
+    oauth_configured: SLACK_CLIENT_SECRET !== 'not-configured'
   });
 });
 
@@ -476,35 +932,11 @@ app.get('/sse', async (req, res) => {
   }
 });
 
-// Handle OAuth discovery requests from Claude
-app.get('/.well-known/oauth-authorization-server', (req, res) => {
-  console.log('📋 OAuth discovery requested - sending not supported response');
-  res.status(404).json({
-    error: 'oauth_not_supported',
-    message: 'This server uses direct token authentication, not OAuth'
-  });
-});
-
-// Handle OAuth authorize requests from Claude
-app.get('/authorize', (req, res) => {
-  console.log('🔐 OAuth authorize requested - redirecting to Claude with error');
-  res.redirect(`https://claude.ai/api/mcp/auth_callback?error=unsupported_auth_method&error_description=This+server+uses+direct+token+setup`);
-});
-
-// Catch-all route to prevent any other confusion
-app.use('*', (req, res) => {
-  console.log('⚠️ Unknown route accessed:', req.originalUrl);
-  res.status(404).json({
-    error: 'Route not found',
-    message: 'This is a Slack MCP Server. Use /sse endpoint for MCP connections.',
-    availableEndpoints: ['/', '/health', '/sse']
-  });
-});
-
 // Start server
 app.listen(PORT, () => {
   console.log(`🚀 Slack MCP Server running on port ${PORT}`);
   console.log(`🔗 SSE endpoint: /sse`);
-  console.log(`💡 Ready for Claude integration`);
-  console.log(`📊 No OAuth routes - clean MCP server only`);
+  console.log(`🔐 OAuth discovery: /.well-known/oauth-authorization-server`);
+  console.log(`💡 Ready for Claude integration with hybrid auth`);
+  console.log(`📊 OAuth configured: ${SLACK_CLIENT_SECRET !== 'not-configured'}`);
 });
