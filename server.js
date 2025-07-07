@@ -19,6 +19,18 @@ const SLACK_CLIENT_SECRET = process.env.SLACK_CLIENT_SECRET;
 const SLACK_REDIRECT_URI = process.env.SLACK_REDIRECT_URI;
 const MCP_SECRET = process.env.MCP_SECRET || crypto.randomBytes(32).toString('hex');
 
+// Validate required environment variables
+if (!SLACK_CLIENT_ID || !SLACK_CLIENT_SECRET) {
+  console.error('❌ Missing required environment variables: SLACK_CLIENT_ID, SLACK_CLIENT_SECRET');
+  process.exit(1);
+}
+
+console.log('✅ Environment variables loaded:');
+console.log('- SLACK_CLIENT_ID:', SLACK_CLIENT_ID ? '✓' : '✗');
+console.log('- SLACK_CLIENT_SECRET:', SLACK_CLIENT_SECRET ? '✓' : '✗');
+console.log('- SLACK_REDIRECT_URI:', SLACK_REDIRECT_URI);
+console.log('- MCP_SECRET:', MCP_SECRET ? '✓' : '✗');
+
 // In-memory storage (replace with database in production)
 const userTokens = new Map();
 
