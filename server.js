@@ -55,6 +55,8 @@ function getBaseUrl(req) {
 app.get('/authorize', (req, res) => {
   const { state, redirect_uri } = req.query;
   
+  console.log('Claude authorization request:', { state, redirect_uri });
+  
   if (!state || !redirect_uri) {
     return res.status(400).json({ 
       error: 'Missing required parameters', 
@@ -62,17 +64,30 @@ app.get('/authorize', (req, res) => {
     });
   }
   
-  // For now, we'll redirect to Slack OAuth
-  // In a production setup, you might want to show a page explaining the flow
-  const baseUrl = getBaseUrl(req);
-  const slackOAuthUrl = `${baseUrl}/oauth/slack?state=${encodeURIComponent(state)}&redirect_uri=${encodeURIComponent(redirect_uri)}`;
+  // Store Claude's redirect info to use after Slack auth
+  const authSession = {
+    claude_state: state,
+    claude_redirect_uri: redirect_uri,
+    timestamp: Date.now()
+  };
   
+  // Store session (in production, use proper session storage)
+  const sessionKey = crypto.randomBytes(16).toString('hex');
+  userTokens.set(`auth_${sessionKey}`, authSession);
+  
+  // Redirect to Slack OAuth with session key
+  const baseUrl = getBaseUrl(req);
+  const slackOAuthUrl = `${baseUrl}/oauth/slack?auth_session=${sessionKey}`;
+  
+  console.log('Redirecting to Slack OAuth:', slackOAuthUrl);
   res.redirect(slackOAuthUrl);
 });
 
 // MCP Token endpoint for Claude
 app.post('/token', express.json(), (req, res) => {
   const { code, state } = req.body;
+  
+  console.log('Token request from Claude:', { code: !!code, state });
   
   if (!code) {
     return res.status(400).json({ 
@@ -81,9 +96,30 @@ app.post('/token', express.json(), (req, res) => {
     });
   }
   
-  // In a real implementation, you'd validate the code and return an access token
-  // For now, we'll return a simple token that includes the MCP secret
-  const accessToken = `mcp_${MCP_SECRET}_${Date.now()}`;
+  // Look up the stored auth mapping
+  const authMapping = userTokens.get(`claude_auth_${code}`);
+  
+  if (!authMapping) {
+    return res.status(400).json({ 
+      error: 'invalid_grant', 
+      error_description: 'Authorization code not found or expired' 
+    });
+  }
+  
+  // Clean up the auth code
+  userTokens.delete(`claude_auth_${code}`);
+  
+  // Create a longer-lived access token for Claude
+  const accessToken = `mcp_${authMapping.team_id}_${authMapping.user_id}_${Date.now()}`;
+  
+  // Store the mapping between MCP token and Slack credentials
+  userTokens.set(accessToken, {
+    team_id: authMapping.team_id,
+    user_id: authMapping.user_id,
+    created_at: new Date().toISOString()
+  });
+  
+  console.log('Issued MCP token for Claude:', accessToken);
   
   res.json({
     access_token: accessToken,
@@ -101,7 +137,10 @@ app.get('/oauth/slack', (req, res) => {
   console.log('OAuth request - Base URL:', baseUrl);
   console.log('OAuth request - Redirect URI:', redirectUri);
   
-  const state = crypto.randomBytes(16).toString('hex');
+  // Get auth session from query params
+  const authSession = req.query.auth_session;
+  
+  const state = authSession || crypto.randomBytes(16).toString('hex');
   
   // User token scopes only - no bot scopes
   const scopes = 'channels:read chat:write users:read';
@@ -123,6 +162,8 @@ app.get('/oauth/callback', async (req, res) => {
   
   const { code, state, error } = req.query;
   
+  console.log('OAuth callback received:', { code: !!code, state, error });
+  
   if (error) {
     return res.status(400).json({ error: 'OAuth error', details: error });
   }
@@ -141,7 +182,7 @@ app.get('/oauth/callback', async (req, res) => {
         client_id: SLACK_CLIENT_ID,
         client_secret: SLACK_CLIENT_SECRET,
         code: code,
-        redirect_uri: redirectUri, // Use the same redirect URI
+        redirect_uri: redirectUri,
       }),
     });
     
@@ -151,7 +192,7 @@ app.get('/oauth/callback', async (req, res) => {
       return res.status(400).json({ error: 'OAuth token exchange failed', details: data.error });
     }
     
-    // Store the token (replace with proper database storage)
+    // Store the token
     const userId = data.authed_user.id;
     const teamId = data.team.id;
     const tokenKey = `${teamId}:${userId}`;
@@ -165,13 +206,44 @@ app.get('/oauth/callback', async (req, res) => {
       created_at: new Date().toISOString()
     });
     
-    res.json({ 
-      success: true, 
-      message: 'Successfully authenticated with Slack',
-      team: data.team.name,
-      user: data.authed_user.name || 'Unknown',
-      redirect_uri_used: redirectUri
-    });
+    console.log('Slack token stored for:', tokenKey);
+    
+    // Check if this was initiated from Claude
+    const authSession = userTokens.get(`auth_${state}`);
+    
+    if (authSession) {
+      // This was initiated from Claude - redirect back to Claude
+      console.log('Redirecting back to Claude:', authSession.claude_redirect_uri);
+      
+      // Clean up the session
+      userTokens.delete(`auth_${state}`);
+      
+      // Create an authorization code for Claude
+      const claudeAuthCode = crypto.randomBytes(32).toString('hex');
+      
+      // Store the mapping between auth code and user token
+      userTokens.set(`claude_auth_${claudeAuthCode}`, {
+        team_id: teamId,
+        user_id: userId,
+        created_at: new Date().toISOString()
+      });
+      
+      // Redirect back to Claude with authorization code
+      const claudeCallbackUrl = `${authSession.claude_redirect_uri}?code=${claudeAuthCode}&state=${authSession.claude_state}`;
+      
+      return res.redirect(claudeCallbackUrl);
+    } else {
+      // Direct Slack auth - show success message
+      res.json({ 
+        success: true, 
+        message: 'Successfully authenticated with Slack',
+        team: data.team.name,
+        user: data.authed_user.name || 'Unknown',
+        redirect_uri_used: redirectUri,
+        team_id: teamId,
+        user_id: userId
+      });
+    }
     
   } catch (error) {
     console.error('OAuth callback error:', error);
@@ -217,23 +289,42 @@ app.post('/mcp', express.json(), async (req, res) => {
   
   const token = authHeader.substring(7);
   
-  // Validate the token (in production, you'd verify this properly)
-  if (!token.startsWith('mcp_')) {
+  // Look up the token mapping
+  const tokenMapping = userTokens.get(token);
+  
+  if (!tokenMapping) {
     return res.status(401).json({ error: 'Invalid token' });
+  }
+  
+  // Get the actual Slack token
+  const slackTokenKey = `${tokenMapping.team_id}:${tokenMapping.user_id}`;
+  const slackTokenData = userTokens.get(slackTokenKey);
+  
+  if (!slackTokenData) {
+    return res.status(401).json({ error: 'Slack token not found' });
   }
   
   // Handle MCP protocol messages
   try {
     const { method, params } = req.body;
     
-    // This is a simplified MCP handler - in production you'd use the full MCP SDK
+    console.log('MCP request:', method, params);
+    
     switch (method) {
       case 'tools/list':
         return res.json({
           tools: [
             {
               name: "slack_send_message",
-              description: "Send a message to a Slack channel or user"
+              description: "Send a message to a Slack channel or user",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  channel: { type: "string", description: "Channel or user to send to" },
+                  text: { type: "string", description: "Message text" }
+                },
+                required: ["channel", "text"]
+              }
             },
             {
               name: "slack_get_channels", 
@@ -241,28 +332,93 @@ app.post('/mcp', express.json(), async (req, res) => {
             },
             {
               name: "slack_get_messages",
-              description: "Get messages from a channel"
+              description: "Get messages from a channel",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  channel: { type: "string", description: "Channel ID" },
+                  limit: { type: "number", description: "Number of messages", default: 10 }
+                },
+                required: ["channel"]
+              }
             }
           ]
         });
         
       case 'tools/call':
-        // Handle tool calls - you'd implement the actual Slack API calls here
-        return res.json({
-          content: [
-            {
-              type: "text",
-              text: "Tool call received - implement actual Slack API integration"
-            }
-          ]
-        });
+        const { name, arguments: args } = params;
+        
+        console.log('Tool call:', name, args);
+        
+        const slack = new WebClient(slackTokenData.access_token);
+        
+        switch (name) {
+          case 'slack_send_message':
+            const result = await slack.chat.postMessage({
+              channel: args.channel,
+              text: args.text
+            });
+            
+            return res.json({
+              content: [
+                {
+                  type: "text",
+                  text: `Message sent successfully! Timestamp: ${result.ts}`
+                }
+              ]
+            });
+            
+          case 'slack_get_channels':
+            const channels = await slack.conversations.list({
+              types: "public_channel,private_channel"
+            });
+            
+            return res.json({
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    channels: channels.channels.map(ch => ({
+                      id: ch.id,
+                      name: ch.name,
+                      is_private: ch.is_private
+                    }))
+                  }, null, 2)
+                }
+              ]
+            });
+            
+          case 'slack_get_messages':
+            const messages = await slack.conversations.history({
+              channel: args.channel,
+              limit: args.limit || 10
+            });
+            
+            return res.json({
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    messages: messages.messages.map(msg => ({
+                      user: msg.user,
+                      text: msg.text,
+                      ts: msg.ts
+                    }))
+                  }, null, 2)
+                }
+              ]
+            });
+            
+          default:
+            return res.status(400).json({ error: 'Unknown tool' });
+        }
         
       default:
         return res.status(400).json({ error: 'Unknown method' });
     }
   } catch (error) {
     console.error('MCP error:', error);
-    return res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({ error: error.message });
   }
 });
 
