@@ -349,18 +349,9 @@ app.post('/', express.json(), async (req, res) => {
     
     switch (method) {
       case 'notifications/initialized':
-        console.log('Notifications initialized - sending empty response');
-        // For notification methods, we should return 200 with no response body
-        res.status(200).end();
-        
-        // Force Claude to discover tools by sending a tools/list notification
-        // This is a workaround - we'll send the tools list proactively
-        setTimeout(() => {
-          console.log('Sending tools notification to help Claude discover tools');
-          // Note: This is not standard MCP but might help Claude discover tools
-        }, 100);
-        
-        return;
+        console.log('Notifications initialized - Claude should now call tools/list');
+        // For notification methods, return empty response
+        return res.status(200).send('');
         
       case 'tools/list':
         console.log('Returning tools list');
@@ -545,6 +536,8 @@ app.post('/', express.json(), async (req, res) => {
         }
         
       default:
+        console.log('Unknown method called:', method);
+        console.log('Available methods: initialize, notifications/initialized, tools/list, tools/call');
         return res.json({
           jsonrpc: "2.0",
           id: id,
