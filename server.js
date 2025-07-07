@@ -408,8 +408,9 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
   }
 });
 
-// Server info endpoint
+// Server info endpoint with SSE redirect
 app.get('/', (req, res) => {
+  const serverUrl = `https://${req.get('host')}`;
   res.json({
     name: "Slack MCP Server",
     version: "1.0.0",
@@ -419,8 +420,13 @@ app.get('/', (req, res) => {
       sse: "/sse",
       health: "/health"
     },
+    mcp: {
+      server_url: `${serverUrl}/sse`,
+      transport: "sse",
+      authentication: "none"
+    },
     instructions: [
-      "1. Add this server to Claude with /sse endpoint",
+      `1. Add this URL to Claude: ${serverUrl}/sse`,
       "2. Use 'slack_setup_token' tool with your Slack token",
       "3. Get token from: https://api.slack.com/custom-integrations/legacy-tokens"
     ]
@@ -461,6 +467,26 @@ app.get('/health', (req, res) => {
     activeSessions: activeSessions.size,
     sessionTokens: sessionTokens.size,
     connectedUsers: Array.from(sessionTokens.keys()).length
+  });
+});
+
+// Block OAuth discovery to force SSE usage
+app.get('/.well-known/oauth-authorization-server', (req, res) => {
+  console.log('🚫 OAuth discovery blocked - redirecting to SSE');
+  res.status(404).json({
+    error: 'OAuth not supported',
+    message: 'This server uses direct SSE connection only',
+    sse_endpoint: `https://${req.get('host')}/sse`
+  });
+});
+
+// Catch-all for any OAuth-related requests
+app.all('*oauth*', (req, res) => {
+  console.log('🚫 OAuth request blocked:', req.path);
+  res.status(404).json({
+    error: 'OAuth not supported',
+    message: 'Use SSE endpoint directly',
+    sse_endpoint: `https://${req.get('host')}/sse`
   });
 });
 
