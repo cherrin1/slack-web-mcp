@@ -4,22 +4,27 @@ const cors = require('cors');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Enhanced CORS configuration for Claude integration
+// Enhanced CORS configuration for Claude
 app.use(cors({
-  origin: ['https://claude.ai', 'https://console.anthropic.com', '*'],
+  origin: ['https://claude.ai', 'https://playground.ai.cloudflare.com', 'https://console.anthropic.com', '*'],
   methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
-  credentials: true
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Cache-Control'],
+  credentials: true,
+  preflightContinue: false,
+  optionsSuccessStatus: 200
 }));
+
+// Handle preflight requests
+app.options('*', cors());
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// In-memory storage with better structure
+// In-memory storage
 const registeredTokens = new Map(); // token -> userInfo
-const activeConnections = new Set();
+const activeConnections = new Map(); // connectionId -> info
 
-// Enhanced SlackClient with better error handling
+// Enhanced SlackClient
 class SlackClient {
   constructor(token) {
     this.token = token;
@@ -99,7 +104,7 @@ class SlackClient {
   }
 }
 
-// Enhanced authentication with better token validation
+// Enhanced authentication
 async function authenticateRequest(req) {
   const authHeader = req.headers.authorization;
   if (!authHeader) {
@@ -116,24 +121,15 @@ async function authenticateRequest(req) {
   const userInfo = registeredTokens.get(token);
   if (!userInfo) {
     console.log('🔍 Token not found in registered tokens');
+    console.log('🔍 Available tokens:', Array.from(registeredTokens.keys()).map(t => t.substring(0, 15) + '...'));
     return null;
   }
 
-  // Test if token is still valid
-  try {
-    const slackClient = new SlackClient(token);
-    await slackClient.testAuth();
-    console.log('✅ Token authenticated for user:', userInfo.name || 'Unknown');
-    return { token, userInfo };
-  } catch (error) {
-    console.log('❌ Token validation failed:', error.message);
-    // Remove invalid token
-    registeredTokens.delete(token);
-    return null;
-  }
+  console.log('✅ Token authenticated for user:', userInfo.userName || 'Unknown');
+  return { token, userInfo };
 }
 
-// Server info endpoint (similar to SSE MCP pattern)
+// Server info endpoint
 app.get('/', (req, res) => {
   res.json({
     name: "Slack MCP Server",
@@ -165,7 +161,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Enhanced registration with better validation
+// Enhanced registration
 app.post('/register', async (req, res) => {
   const { slackToken, userInfo = {} } = req.body;
   
@@ -207,7 +203,7 @@ app.post('/register', async (req, res) => {
   }
 });
 
-// Enhanced connect page with better UX
+// Connect page
 app.get('/connect', (req, res) => {
   const serverUrl = `https://${req.get('host')}`;
   
@@ -367,16 +363,67 @@ app.get('/connect', (req, res) => {
   res.send(html);
 });
 
-// Main MCP endpoint with enhanced protocol support
+// SSE endpoint for MCP connection
+app.get('/mcp', async (req, res) => {
+  console.log('🔄 SSE connection request received');
+  console.log('🔄 Headers:', JSON.stringify(req.headers, null, 2));
+  
+  // Set SSE headers
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, Accept, Cache-Control',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
+  });
+
+  const connectionId = Date.now().toString();
+  activeConnections.set(connectionId, {
+    id: connectionId,
+    startTime: new Date(),
+    lastActivity: new Date()
+  });
+
+  console.log('✅ SSE connection established:', connectionId);
+
+  // Send initial connection event
+  res.write(`data: ${JSON.stringify({
+    jsonrpc: '2.0',
+    method: 'notifications/initialized',
+    params: {}
+  })}\n\n`);
+
+  // Keep connection alive
+  const keepAlive = setInterval(() => {
+    res.write(`: keepalive ${Date.now()}\n\n`);
+  }, 30000);
+
+  // Handle client disconnect
+  req.on('close', () => {
+    console.log('🔌 SSE connection closed:', connectionId);
+    clearInterval(keepAlive);
+    activeConnections.delete(connectionId);
+  });
+
+  req.on('error', (error) => {
+    console.error('❌ SSE connection error:', error);
+    clearInterval(keepAlive);
+    activeConnections.delete(connectionId);
+  });
+});
+
+// Main MCP POST endpoint
 app.post('/mcp', async (req, res) => {
   const { method, params, id } = req.body || {};
   
-  console.log(`🔧 MCP Request: ${method}`, params ? Object.keys(params) : 'no params');
+  console.log(`🔧 MCP POST Request: ${method}`, params ? Object.keys(params) : 'no params');
+  console.log('🔧 Request headers:', JSON.stringify(req.headers, null, 2));
   
   try {
-    // Handle MCP protocol methods
     switch (method) {
       case 'initialize':
+        console.log('🔧 Initialize request');
         return res.json({
           jsonrpc: '2.0',
           result: {
@@ -396,11 +443,11 @@ app.post('/mcp', async (req, res) => {
         });
 
       case 'notifications/initialized':
-        activeConnections.add(req.ip);
         console.log('✅ MCP session initialized');
         return res.status(200).send();
 
       case 'tools/list':
+        console.log('🔧 Tools list request');
         return res.json({
           jsonrpc: '2.0',
           result: {
@@ -499,8 +546,10 @@ app.post('/mcp', async (req, res) => {
         });
 
       case 'tools/call':
+        console.log('🔧 Tool call request:', params?.name);
         const auth = await authenticateRequest(req);
         if (!auth) {
+          console.log('❌ Authentication failed for tool call');
           return res.status(401).json({
             jsonrpc: '2.0',
             error: {
@@ -520,7 +569,9 @@ app.post('/mcp', async (req, res) => {
         let result;
         try {
           result = await handleToolCall(name, args, slackClient);
+          console.log('✅ Tool call completed:', name);
         } catch (error) {
+          console.error('❌ Tool call failed:', error.message);
           return res.json({
             jsonrpc: '2.0',
             result: {
@@ -541,6 +592,7 @@ app.post('/mcp', async (req, res) => {
         });
 
       default:
+        console.log('❌ Unknown method:', method);
         return res.status(400).json({
           jsonrpc: '2.0',
           error: { 
@@ -563,7 +615,7 @@ app.post('/mcp', async (req, res) => {
   }
 });
 
-// Enhanced tool call handler with better formatting
+// Tool call handler
 async function handleToolCall(name, args, slackClient) {
   switch (name) {
     case 'slack_get_channels':
@@ -593,7 +645,7 @@ async function handleToolCall(name, args, slackClient) {
       const users = new Map();
       
       try {
-        for (const userId of userIds.slice(0, 10)) { // Limit to avoid rate limits
+        for (const userId of userIds.slice(0, 10)) {
           const userInfo = await slackClient.getUserInfo(userId);
           users.set(userId, userInfo.user.real_name || userInfo.user.name);
         }
@@ -602,7 +654,7 @@ async function handleToolCall(name, args, slackClient) {
       }
       
       const messages = history.messages
-        .reverse() // Show chronological order
+        .reverse()
         .map(msg => {
           const userName = users.get(msg.user) || msg.user || 'Unknown';
           const timestamp = new Date(parseFloat(msg.ts) * 1000).toLocaleString();
