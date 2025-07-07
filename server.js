@@ -12,6 +12,7 @@ const PORT = process.env.PORT || 3000;
 // OAuth configuration - Claude Web expects specific values
 const SLACK_CLIENT_ID = process.env.SLACK_CLIENT_ID || 'slack-mcp-claude-web';
 const SLACK_CLIENT_SECRET = process.env.SLACK_CLIENT_SECRET || 'dummy-secret-for-manual-auth';
+const SERVER_URL = process.env.WEBSITE_HOSTNAME ? `https://${process.env.WEBSITE_HOSTNAME}` : `https://slack-mcp-0000034.purplepebble-32448054.westus2.azurecontainerapps.io`;
 const REDIRECT_URI = `${SERVER_URL}/authorize`;
 
 // Enhanced CORS for Claude
@@ -310,8 +311,7 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
 
   // Handle auth URL request
   if (name === 'slack_get_auth_url') {
-    const serverUrl = process.env.WEBSITE_HOSTNAME ? `https://${process.env.WEBSITE_HOSTNAME}` : 'https://your-domain.com';
-    const authUrl = `${serverUrl}/auth?session=${sessionId}`;
+    const authUrl = `${SERVER_URL}/auth?session=${sessionId}`;
     
     return {
       content: [{
@@ -927,7 +927,7 @@ app.get('/', (req, res) => {
       oauth_discovery: "/.well-known/oauth-authorization-server"
     },
     instructions: [
-      "1. Add this server to Claude: your-domain.com/sse",
+      "1. Add this server to Claude: " + (process.env.WEBSITE_HOSTNAME ? `https://${process.env.WEBSITE_HOSTNAME}/sse` : "your-domain.com/sse"),
       "2. Authenticate via OAuth popup or use slack_setup_token tool",
       "3. Get token from: https://api.slack.com/custom-integrations/legacy-tokens"
     ]
