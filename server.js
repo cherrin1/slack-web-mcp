@@ -115,14 +115,19 @@ app.get('/oauth/slack', (req, res) => {
   
   // Minimal working scopes (space-separated)
   const scopes = 'channels:read chat:write users:read';
+  // Manually encode spaces as %20
+  const encodedScopes = scopes.replace(/ /g, '%20');
   
   console.log('Using scopes:', scopes);
+  console.log('Encoded scopes:', encodedScopes);
   console.log('Client ID:', SLACK_CLIENT_ID);
   
-  // Don't encode the scopes - let the browser handle URL encoding naturally
-  const authUrl = `https://slack.com/oauth/v2/authorize?client_id=${SLACK_CLIENT_ID}&scope=${scopes}&state=${state}&redirect_uri=${encodeURIComponent(redirectUri)}`;
+  const authUrl = `https://slack.com/oauth/v2/authorize?client_id=${SLACK_CLIENT_ID}&scope=${encodedScopes}&state=${state}&redirect_uri=${encodeURIComponent(redirectUri)}`;
   
   console.log('Auth URL:', authUrl);
+  
+  res.redirect(authUrl);
+});
   
   res.redirect(authUrl);
 });
