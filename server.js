@@ -103,7 +103,7 @@ app.get('/oauth/slack', (req, res) => {
   
   const state = crypto.randomBytes(16).toString('hex');
   
-  // Updated scopes - these are the correct user token scopes
+  // Correct Slack OAuth scopes for user tokens
   const scopes = [
     'channels:history',
     'channels:read',
@@ -117,7 +117,7 @@ app.get('/oauth/slack', (req, res) => {
     'mpim:read',
     'search:read',
     'users:read'
-  ].join(',');
+  ].join(' '); // Note: Slack uses SPACE-separated scopes, not commas!
   
   const authUrl = `https://slack.com/oauth/v2/authorize?client_id=${SLACK_CLIENT_ID}&scope=${scopes}&state=${state}&redirect_uri=${encodeURIComponent(redirectUri)}`;
   
