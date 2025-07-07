@@ -16,8 +16,22 @@ const port = process.env.PORT || 3000;
 // Environment variables
 const SLACK_CLIENT_ID = process.env.SLACK_CLIENT_ID;
 const SLACK_CLIENT_SECRET = process.env.SLACK_CLIENT_SECRET;
-const SLACK_REDIRECT_URI = process.env.SLACK_REDIRECT_URI;
 const MCP_SECRET = process.env.MCP_SECRET || crypto.randomBytes(32).toString('hex');
+
+// Base URL will be determined at runtime
+let BASE_URL = process.env.BASE_URL || null;
+
+// Validate required environment variables
+if (!SLACK_CLIENT_ID || !SLACK_CLIENT_SECRET) {
+  console.error('❌ Missing required environment variables: SLACK_CLIENT_ID, SLACK_CLIENT_SECRET');
+  process.exit(1);
+}
+
+console.log('✅ Environment variables loaded:');
+console.log('- SLACK_CLIENT_ID:', SLACK_CLIENT_ID ? '✓' : '✗');
+console.log('- SLACK_CLIENT_SECRET:', SLACK_CLIENT_SECRET ? '✓' : '✗');
+console.log('- BASE_URL:', BASE_URL || 'Will be determined at runtime');
+console.log('- MCP_SECRET:', MCP_SECRET ? '✓' : '✗');
 
 // In-memory storage (replace with database in production)
 const userTokens = new Map();
@@ -25,8 +39,26 @@ const userTokens = new Map();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Helper function to get base URL
+function getBaseUrl(req) {
+  if (BASE_URL) {
+    return BASE_URL;
+  }
+  
+  // For Azure Container Apps, use the host header
+  const protocol = req.get('x-forwarded-proto') || 'https';
+  const host = req.get('host');
+  return `${protocol}://${host}`;
+}
+
 // OAuth endpoints
 app.get('/oauth/slack', (req, res) => {
+  const baseUrl = getBaseUrl(req);
+  const redirectUri = `${baseUrl}/oauth/callback`;
+  
+  console.log('OAuth request - Base URL:', baseUrl);
+  console.log('OAuth request - Redirect URI:', redirectUri);
+  
   const state = crypto.randomBytes(16).toString('hex');
   const scopes = [
     'channels:history',
@@ -42,12 +74,15 @@ app.get('/oauth/slack', (req, res) => {
     'users:read'
   ].join(',');
   
-  const authUrl = `https://slack.com/oauth/v2/authorize?client_id=${SLACK_CLIENT_ID}&scope=${scopes}&state=${state}&redirect_uri=${encodeURIComponent(SLACK_REDIRECT_URI)}`;
+  const authUrl = `https://slack.com/oauth/v2/authorize?client_id=${SLACK_CLIENT_ID}&scope=${scopes}&state=${state}&redirect_uri=${encodeURIComponent(redirectUri)}`;
   
   res.redirect(authUrl);
 });
 
 app.get('/oauth/callback', async (req, res) => {
+  const baseUrl = getBaseUrl(req);
+  const redirectUri = `${baseUrl}/oauth/callback`;
+  
   const { code, state, error } = req.query;
   
   if (error) {
@@ -68,7 +103,7 @@ app.get('/oauth/callback', async (req, res) => {
         client_id: SLACK_CLIENT_ID,
         client_secret: SLACK_CLIENT_SECRET,
         code: code,
-        redirect_uri: SLACK_REDIRECT_URI,
+        redirect_uri: redirectUri, // Use the same redirect URI
       }),
     });
     
@@ -96,7 +131,8 @@ app.get('/oauth/callback', async (req, res) => {
       success: true, 
       message: 'Successfully authenticated with Slack',
       team: data.team.name,
-      user: data.authed_user.name || 'Unknown'
+      user: data.authed_user.name || 'Unknown',
+      redirect_uri_used: redirectUri
     });
     
   } catch (error) {
@@ -108,6 +144,26 @@ app.get('/oauth/callback', async (req, res) => {
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+});
+
+// Info endpoint - shows current redirect URI
+app.get('/info', (req, res) => {
+  const baseUrl = getBaseUrl(req);
+  const redirectUri = `${baseUrl}/oauth/callback`;
+  
+  res.json({
+    app_name: 'Slack MCP Server',
+    version: '1.0.0',
+    base_url: baseUrl,
+    oauth_url: `${baseUrl}/oauth/slack`,
+    redirect_uri: redirectUri,
+    health_url: `${baseUrl}/health`,
+    instructions: {
+      step1: 'Add this redirect URI to your Slack app settings',
+      step2: `Visit ${baseUrl}/oauth/slack to authenticate`,
+      step3: 'Use the MCP server with Claude'
+    }
+  });
 });
 
 // MCP Server setup
@@ -427,8 +483,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 // Start the Express server
 app.listen(port, () => {
   console.log(`Slack MCP Server listening on port ${port}`);
-  console.log(`OAuth URL: http://localhost:${port}/oauth/slack`);
   console.log(`Health check: http://localhost:${port}/health`);
+  console.log(`OAuth URL: http://localhost:${port}/oauth/slack`);
+  console.log('');
+  console.log('🚀 Server ready! When deployed, the OAuth URL will be:');
+  console.log('   https://your-app-name.region.azurecontainerapps.io/oauth/slack');
+  console.log('');
+  console.log('📝 Remember to add this redirect URI to your Slack app:');
+  console.log('   https://your-app-name.region.azurecontainerapps.io/oauth/callback');
 });
 
 // Start the MCP server
