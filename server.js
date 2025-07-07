@@ -109,8 +109,8 @@ app.get('/oauth/slack', (req, res) => {
   console.log('Using scopes:', scopes);
   console.log('Client ID:', SLACK_CLIENT_ID);
   
-  // Build OAuth URL - this should match your Slack app's redirect URI exactly
-  const authUrl = `https://slack.com/oauth/v2/authorize?client_id=${SLACK_CLIENT_ID}&scope=${scopes}&state=${state}&redirect_uri=${encodeURIComponent(redirectUri)}&user_scope=${scopes}`;
+  // Build OAuth URL with user_scope parameter (not scope)
+  const authUrl = `https://slack.com/oauth/v2/authorize?client_id=${SLACK_CLIENT_ID}&user_scope=${encodeURIComponent(scopes)}&state=${state}&redirect_uri=${encodeURIComponent(redirectUri)}`;
   
   console.log('Auth URL:', authUrl);
   
