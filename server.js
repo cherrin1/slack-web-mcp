@@ -509,6 +509,14 @@ app.all('/token', (req, res) => {
   res.redirect(307, '/sse');
 });
 
+// Create a custom server setup that works properly with SSE
+class CustomSSETransport extends SSEServerTransport {
+  constructor(messagePath, response) {
+    super(messagePath, response);
+    this.messagePath = messagePath;
+  }
+}
+
 // Store active transports to handle messages properly
 const activeTransports = new Map(); // sessionId -> transport
 const sessionRequests = new Map(); // track requests by session
@@ -522,7 +530,7 @@ app.get('/sse', async (req, res) => {
   const sessionId = `sess_${Date.now()}_${Math.random().toString(36).substring(7)}`;
   
   try {
-    // Create SSE transport with the correct message endpoint
+    // Create SSE transport - but let's try without the message path
     console.log('🚀 Creating SSE transport for session:', sessionId);
     const transport = new SSEServerTransport('/messages', res);
     
@@ -538,7 +546,7 @@ app.get('/sse', async (req, res) => {
     
     // Connect MCP server to this transport with session context
     console.log('🔗 Connecting MCP server to transport...');
-    await mcpServer.connect(transport, {
+    const server = await mcpServer.connect(transport, {
       meta: { sessionId }
     });
     
@@ -576,45 +584,8 @@ app.get('/sse', async (req, res) => {
   }
 });
 
-// Add back POST handler for /messages - this is required for MCP SSE transport
-app.post('/messages', async (req, res) => {
-  console.log('📨 POST to /messages received:', req.body);
-  console.log('📋 Headers:', req.headers);
-  
-  try {
-    // The message should be handled by the MCP server through the transport
-    // But we need to provide a proper endpoint for the client to post to
-    
-    // For now, let's acknowledge the message and let the SSE handle the response
-    res.json({
-      jsonrpc: "2.0",
-      id: req.body.id,
-      result: {
-        protocolVersion: "2024-11-05",
-        capabilities: {
-          tools: {},
-          logging: {}
-        },
-        serverInfo: {
-          name: "slack-mcp-server",
-          version: "1.0.0"
-        }
-      }
-    });
-    
-  } catch (error) {
-    console.error('❌ Message handling error:', error);
-    res.status(500).json({
-      jsonrpc: "2.0",
-      id: req.body.id || null,
-      error: {
-        code: -32603,
-        message: "Internal error",
-        data: error.message
-      }
-    });
-  }
-});
+// Remove the POST /messages handler completely - it's interfering
+// The SSEServerTransport should create its own message handler internally
 
 // Also add POST handler for /sse endpoint
 app.post('/sse', async (req, res) => {
