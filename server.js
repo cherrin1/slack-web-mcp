@@ -12,7 +12,6 @@ const PORT = process.env.PORT || 3000;
 // OAuth configuration - Claude Web expects specific values
 const SLACK_CLIENT_ID = process.env.SLACK_CLIENT_ID || 'slack-mcp-claude-web';
 const SLACK_CLIENT_SECRET = process.env.SLACK_CLIENT_SECRET || 'dummy-secret-for-manual-auth';
-const SERVER_URL = process.env.WEBSITE_HOSTNAME ? `https://${process.env.WEBSITE_HOSTNAME}` : `https://slack-mcp-0000034.purplepebble-32448054.westus2.azurecontainerapps.io`;
 const REDIRECT_URI = `${SERVER_URL}/authorize`;
 
 // Enhanced CORS for Claude
