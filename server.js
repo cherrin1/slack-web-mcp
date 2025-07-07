@@ -362,9 +362,62 @@ app.post('/', express.json(), async (req, res) => {
     
     switch (method) {
       case 'notifications/initialized':
-        console.log('Notifications initialized - Claude should now call tools/list');
-        // For notification methods, return empty response
-        return res.status(200).send('');
+        console.log('Notifications initialized - returning with tools info');
+        
+        // Try returning tools info in the notification response
+        return res.json({
+          jsonrpc: "2.0",
+          result: {
+            tools: [
+              {
+                name: "slack_send_message",
+                description: "Send a message to a Slack channel or user",
+                inputSchema: {
+                  type: "object",
+                  properties: {
+                    channel: { 
+                      type: "string", 
+                      description: "Channel name (e.g., #general) or user ID" 
+                    },
+                    text: { 
+                      type: "string", 
+                      description: "Message text to send" 
+                    }
+                  },
+                  required: ["channel", "text"]
+                }
+              },
+              {
+                name: "slack_get_channels", 
+                description: "Get list of channels you have access to",
+                inputSchema: {
+                  type: "object",
+                  properties: {},
+                  required: []
+                }
+              },
+              {
+                name: "slack_get_messages",
+                description: "Get recent messages from a channel",
+                inputSchema: {
+                  type: "object",
+                  properties: {
+                    channel: { 
+                      type: "string", 
+                      description: "Channel name (e.g., #general) or channel ID" 
+                    },
+                    limit: { 
+                      type: "number", 
+                      description: "Number of messages to retrieve (default: 10, max: 100)",
+                      default: 10
+                    }
+                  },
+                  required: ["channel"]
+                }
+              }
+            ]
+          }
+        });
         
       case 'tools/list':
         console.log('Returning tools list');
