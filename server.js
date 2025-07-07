@@ -408,7 +408,13 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
   }
 });
 
-// Server info endpoint with SSE redirect
+// Alternative: If you enter the base URL without /sse, redirect to SSE
+app.get('/mcp', (req, res) => {
+  console.log('🔄 MCP endpoint accessed - redirecting to SSE');
+  res.redirect(307, '/sse');
+});
+
+// Server info endpoint with clear instructions
 app.get('/', (req, res) => {
   const serverUrl = `https://${req.get('host')}`;
   res.json({
@@ -470,24 +476,37 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Block OAuth discovery to force SSE usage
+// OAuth discovery endpoint - make everything point to SSE
 app.get('/.well-known/oauth-authorization-server', (req, res) => {
-  console.log('🚫 OAuth discovery blocked - redirecting to SSE');
-  res.status(404).json({
-    error: 'OAuth not supported',
-    message: 'This server uses direct SSE connection only',
-    sse_endpoint: `https://${req.get('host')}/sse`
+  console.log('🔄 OAuth discovery requested - pointing everything to SSE');
+  const serverUrl = `https://${req.get('host')}`;
+  
+  // Tell Claude that ALL OAuth endpoints are actually the SSE endpoint
+  res.json({
+    issuer: serverUrl,
+    authorization_endpoint: `${serverUrl}/sse`,
+    token_endpoint: `${serverUrl}/sse`, 
+    sse_endpoint: `${serverUrl}/sse`,
+    response_types_supported: ['code'],
+    grant_types_supported: ['authorization_code'],
+    code_challenge_methods_supported: ['S256'],
+    scopes_supported: ['mcp'],
+    token_endpoint_auth_methods_supported: ['none'],
+    // Add MCP-specific metadata
+    mcp_transport: 'sse',
+    mcp_endpoint: `${serverUrl}/sse`
   });
 });
 
-// Catch-all for any OAuth-related requests
-app.all('*oauth*', (req, res) => {
-  console.log('🚫 OAuth request blocked:', req.path);
-  res.status(404).json({
-    error: 'OAuth not supported',
-    message: 'Use SSE endpoint directly',
-    sse_endpoint: `https://${req.get('host')}/sse`
-  });
+// All OAuth requests get handled by SSE endpoint
+app.all('/authorize', (req, res) => {
+  console.log('🔄 OAuth authorize - redirecting to SSE');
+  res.redirect(307, '/sse');
+});
+
+app.all('/token', (req, res) => {
+  console.log('🔄 OAuth token - redirecting to SSE');  
+  res.redirect(307, '/sse');
 });
 
 // SSE endpoint for MCP connections
@@ -547,6 +566,41 @@ app.get('/sse', async (req, res) => {
       });
     }
   }
+});
+
+// Handle POST requests to /messages (required for SSE transport)
+app.post('/messages', (req, res) => {
+  console.log('📨 POST to /messages received:', req.body);
+  console.log('📋 Headers:', req.headers);
+  
+  // The SSE transport should handle this, but Claude is trying to POST here
+  // This might be for sending messages back to the server
+  
+  try {
+    // Find the session based on some identifier
+    // For now, just acknowledge the message
+    res.json({
+      success: true,
+      message: 'Message received',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ Message handling error:', error);
+    res.status(500).json({
+      error: 'Message handling failed',
+      message: error.message
+    });
+  }
+});
+
+// Also handle GET requests to /messages
+app.get('/messages', (req, res) => {
+  console.log('📬 GET to /messages received');
+  res.json({
+    endpoint: '/messages',
+    method: 'POST', 
+    description: 'Endpoint for MCP message handling'
+  });
 });
 
 // Start server
