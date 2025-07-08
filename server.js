@@ -273,9 +273,7 @@ app.get('/info', (req, res) => {
 // Debug endpoint to test tools
 app.get('/debug/tools', async (req, res) => {
   try {
-    const toolsResult = await server.requestHandlers.get(ListToolsRequestSchema.properties.method.const)({
-      params: {}
-    });
+    const toolsResult = await toolsHandler();
     res.json({
       success: true,
       tools: toolsResult
@@ -316,8 +314,8 @@ const server = new Server(
   }
 );
 
-// List tools handler
-server.setRequestHandler(ListToolsRequestSchema, async () => {
+// Store handlers for direct access
+const toolsHandler = async () => {
   console.log('🔧 Tools list requested - returning 3 tools');
   return {
     tools: [
@@ -394,10 +392,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       }
     ]
   };
-});
+};
 
-// Call tool handler
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+const callHandler = async (request) => {
   console.log('🛠️ Tool call received:', request.params.name);
   
   const { name, arguments: args } = request.params;
@@ -477,7 +474,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       `Failed to execute ${name}: ${error.message}`
     );
   }
-});
+};
+
+// List tools handler
+server.setRequestHandler(ListToolsRequestSchema, toolsHandler);
+
+// Call tool handler
+server.setRequestHandler(CallToolRequestSchema, callHandler);
 
 // Start the Express server
 app.listen(port, () => {
@@ -552,10 +555,8 @@ app.post('/', async (req, res) => {
 
       case 'tools/list':
         console.log('🔧 Tools list requested via HTTP - calling handler');
-        // Call the server's handler directly
-        const toolsResult = await server.requestHandlers.get(ListToolsRequestSchema.properties.method.const)({
-          params: params || {}
-        });
+        // Call the handler directly
+        const toolsResult = await toolsHandler();
         console.log('🔧 Tools list result:', JSON.stringify(toolsResult, null, 2));
         return res.json({
           jsonrpc: "2.0",
@@ -565,8 +566,8 @@ app.post('/', async (req, res) => {
 
       case 'tools/call':
         console.log('🛠️ Tool call via HTTP:', params?.name);
-        // Call the server's handler directly  
-        const callResult = await server.requestHandlers.get(CallToolRequestSchema.properties.method.const)({
+        // Call the handler directly  
+        const callResult = await callHandler({
           params: params || {}
         });
         return res.json({
