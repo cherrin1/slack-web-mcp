@@ -1,14 +1,9 @@
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  CallToolRequestSchema,
-  ErrorCode,
-  ListToolsRequestSchema,
-  McpError,
-} from "@modelcontextprotocol/sdk/types.js";
 import express from "express";
 import { WebClient } from "@slack/web-api";
 import crypto from "crypto";
+import { z } from "zod";
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -108,14 +103,17 @@ app.get('/oauth/callback', async (req, res) => {
   console.log('OAuth callback received:', { code: !!code, state, error });
   
   if (error) {
+    console.error('OAuth error received:', error);
     return res.status(400).json({ error: 'OAuth error', details: error });
   }
   
   if (!code) {
+    console.error('No authorization code received');
     return res.status(400).json({ error: 'Missing authorization code' });
   }
   
   try {
+    console.log('Exchanging code for token...');
     const response = await fetch('https://slack.com/api/oauth.v2.access', {
       method: 'POST',
       headers: {
@@ -130,8 +128,10 @@ app.get('/oauth/callback', async (req, res) => {
     });
     
     const data = await response.json();
+    console.log('OAuth response:', JSON.stringify(data, null, 2));
     
     if (!data.ok) {
+      console.error('OAuth token exchange failed:', data.error);
       return res.status(400).json({ error: 'OAuth token exchange failed', details: data.error });
     }
     
@@ -190,7 +190,7 @@ app.get('/oauth/callback', async (req, res) => {
     
   } catch (error) {
     console.error('OAuth callback error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Internal server error', details: error.message });
   }
 });
 
@@ -240,6 +240,132 @@ app.post('/token', express.json(), (req, res) => {
   });
 });
 
+// Helper function to get Slack client
+function getSlackClient(teamId, userId) {
+  const tokenKey = `${teamId}:${userId}`;
+  const tokenData = userTokens.get(tokenKey);
+  
+  if (!tokenData) {
+    throw new Error(`No token found for team ${teamId} and user ${userId}. Please authenticate first.`);
+  }
+  
+  return new WebClient(tokenData.access_token);
+}
+
+// Create MCP Server using the new SDK
+const mcpServer = new McpServer({
+  name: "slack-user-token-server",
+  version: "1.0.0",
+});
+
+// Register tools using the new API
+mcpServer.registerTool(
+  "slack_send_message",
+  {
+    description: "Send a message to a Slack channel or user",
+    inputSchema: {
+      team_id: z.string().describe("Slack team/workspace ID"),
+      user_id: z.string().describe("Slack user ID (token owner)"),
+      channel: z.string().describe("Channel ID or name (e.g., #general, @username, or channel ID)"),
+      text: z.string().describe("Message text to send")
+    }
+  },
+  async ({ team_id, user_id, channel, text }) => {
+    console.log('🛠️ Tool call: slack_send_message');
+    
+    const slack = getSlackClient(team_id, user_id);
+    
+    const result = await slack.chat.postMessage({
+      channel: channel,
+      text: text
+    });
+    
+    return {
+      content: [
+        {
+          type: "text",
+          text: `✅ Message sent successfully to ${channel}!\n\nTimestamp: ${result.ts}\nChannel: ${result.channel}`
+        }
+      ]
+    };
+  }
+);
+
+mcpServer.registerTool(
+  "slack_get_channels",
+  {
+    description: "Get list of channels the user has access to",
+    inputSchema: {
+      team_id: z.string().describe("Slack team/workspace ID"),
+      user_id: z.string().describe("Slack user ID (token owner)")
+    }
+  },
+  async ({ team_id, user_id }) => {
+    console.log('🛠️ Tool call: slack_get_channels');
+    
+    const slack = getSlackClient(team_id, user_id);
+    
+    const channels = await slack.conversations.list({
+      types: "public_channel,private_channel",
+      limit: 100
+    });
+    
+    const channelList = channels.channels
+      .filter(ch => ch.is_member)
+      .map(ch => `• #${ch.name} (${ch.is_private ? 'private' : 'public'})`)
+      .join('\n');
+    
+    return {
+      content: [
+        {
+          type: "text",
+          text: `📋 Your Slack channels:\n\n${channelList}`
+        }
+      ]
+    };
+  }
+);
+
+mcpServer.registerTool(
+  "slack_get_messages",
+  {
+    description: "Get messages from a channel",
+    inputSchema: {
+      team_id: z.string().describe("Slack team/workspace ID"),
+      user_id: z.string().describe("Slack user ID (token owner)"),
+      channel: z.string().describe("Channel ID"),
+      limit: z.number().optional().describe("Number of messages to retrieve (max 100)")
+    }
+  },
+  async ({ team_id, user_id, channel, limit = 10 }) => {
+    console.log('🛠️ Tool call: slack_get_messages');
+    
+    const slack = getSlackClient(team_id, user_id);
+    
+    const messages = await slack.conversations.history({
+      channel: channel,
+      limit: Math.min(limit, 100)
+    });
+    
+    const messageList = messages.messages
+      .slice(0, 10)
+      .map(msg => {
+        const timestamp = new Date(parseInt(msg.ts) * 1000).toLocaleString();
+        return `[${timestamp}] ${msg.user}: ${msg.text || '(no text)'}`;
+      })
+      .join('\n');
+    
+    return {
+      content: [
+        {
+          type: "text",
+          text: `💬 Recent messages from ${channel}:\n\n${messageList}`
+        }
+      ]
+    };
+  }
+);
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ 
@@ -269,220 +395,6 @@ app.get('/info', (req, res) => {
     }
   });
 });
-
-// Debug endpoint to test tools
-app.get('/debug/tools', async (req, res) => {
-  try {
-    const toolsResult = await toolsHandler();
-    res.json({
-      success: true,
-      tools: toolsResult
-    });
-  } catch (error) {
-    res.json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-// Helper function to get Slack client
-function getSlackClient(teamId, userId) {
-  const tokenKey = `${teamId}:${userId}`;
-  const tokenData = userTokens.get(tokenKey);
-  
-  if (!tokenData) {
-    throw new McpError(
-      ErrorCode.InvalidRequest,
-      `No token found for team ${teamId} and user ${userId}. Please authenticate first.`
-    );
-  }
-  
-  return new WebClient(tokenData.access_token);
-}
-
-// MCP Server setup using the 0.6.0 SDK
-const server = new Server(
-  {
-    name: "slack-user-token-server",
-    version: "1.0.0",
-  },
-  {
-    capabilities: {
-      tools: {
-        listChanged: true
-      },
-    },
-  }
-);
-
-// Store handlers for direct access
-const toolsHandler = async () => {
-  console.log('🔧 Tools list requested - returning 3 tools');
-  return {
-    tools: [
-      {
-        name: "slack_send_message",
-        description: "Send a message to a Slack channel or user",
-        inputSchema: {
-          type: "object",
-          properties: {
-            team_id: {
-              type: "string",
-              description: "Slack team/workspace ID"
-            },
-            user_id: {
-              type: "string", 
-              description: "Slack user ID (token owner)"
-            },
-            channel: {
-              type: "string",
-              description: "Channel ID or name (e.g., #general, @username, or channel ID)"
-            },
-            text: {
-              type: "string",
-              description: "Message text to send"
-            }
-          },
-          required: ["team_id", "user_id", "channel", "text"]
-        }
-      },
-      {
-        name: "slack_get_channels",
-        description: "Get list of channels the user has access to",
-        inputSchema: {
-          type: "object",
-          properties: {
-            team_id: {
-              type: "string",
-              description: "Slack team/workspace ID"
-            },
-            user_id: {
-              type: "string",
-              description: "Slack user ID (token owner)"
-            }
-          },
-          required: ["team_id", "user_id"]
-        }
-      },
-      {
-        name: "slack_get_messages",
-        description: "Get messages from a channel",
-        inputSchema: {
-          type: "object",
-          properties: {
-            team_id: {
-              type: "string",
-              description: "Slack team/workspace ID"
-            },
-            user_id: {
-              type: "string",
-              description: "Slack user ID (token owner)"
-            },
-            channel: {
-              type: "string",
-              description: "Channel ID"
-            },
-            limit: {
-              type: "number",
-              description: "Number of messages to retrieve (max 100)",
-              default: 10
-            }
-          },
-          required: ["team_id", "user_id", "channel"]
-        }
-      }
-    ]
-  };
-};
-
-const callHandler = async (request) => {
-  console.log('🛠️ Tool call received:', request.params.name);
-  
-  const { name, arguments: args } = request.params;
-  
-  try {
-    const slack = getSlackClient(args.team_id, args.user_id);
-    
-    switch (name) {
-      case "slack_send_message":
-        const result = await slack.chat.postMessage({
-          channel: args.channel,
-          text: args.text
-        });
-        
-        return {
-          content: [
-            {
-              type: "text",
-              text: `✅ Message sent successfully to ${args.channel}!\n\nTimestamp: ${result.ts}\nChannel: ${result.channel}`
-            }
-          ]
-        };
-        
-      case "slack_get_channels":
-        const channels = await slack.conversations.list({
-          types: "public_channel,private_channel",
-          limit: 100
-        });
-        
-        const channelList = channels.channels
-          .filter(ch => ch.is_member)
-          .map(ch => `• #${ch.name} (${ch.is_private ? 'private' : 'public'})`)
-          .join('\n');
-        
-        return {
-          content: [
-            {
-              type: "text",
-              text: `📋 Your Slack channels:\n\n${channelList}`
-            }
-          ]
-        };
-        
-      case "slack_get_messages":
-        const messages = await slack.conversations.history({
-          channel: args.channel,
-          limit: Math.min(args.limit || 10, 100)
-        });
-        
-        const messageList = messages.messages
-          .slice(0, 10)
-          .map(msg => {
-            const timestamp = new Date(parseInt(msg.ts) * 1000).toLocaleString();
-            return `[${timestamp}] ${msg.user}: ${msg.text || '(no text)'}`;
-          })
-          .join('\n');
-        
-        return {
-          content: [
-            {
-              type: "text",
-              text: `💬 Recent messages from ${args.channel}:\n\n${messageList}`
-            }
-          ]
-        };
-        
-      default:
-        throw new McpError(
-          ErrorCode.MethodNotFound,
-          `Unknown tool: ${name}`
-        );
-    }
-  } catch (error) {
-    console.error(`Error in ${name}:`, error);
-    throw new McpError(
-      ErrorCode.InternalError,
-      `Failed to execute ${name}: ${error.message}`
-    );
-  }
-};
-
-// List tools handler
-server.setRequestHandler(ListToolsRequestSchema, toolsHandler);
-
-// Call tool handler
-server.setRequestHandler(CallToolRequestSchema, callHandler);
 
 // Start the Express server
 app.listen(port, () => {
@@ -558,26 +470,53 @@ app.post('/', async (req, res) => {
         return res.status(200).send('');
 
       case 'tools/list':
-        console.log('🔧 Tools list requested via HTTP - calling handler');
-        // Call the handler directly
-        const toolsResult = await toolsHandler();
-        console.log('🔧 Tools list result:', JSON.stringify(toolsResult, null, 2));
+        console.log('🔧 Tools list requested via HTTP');
+        // Return the tools registered with mcpServer
+        const tools = Array.from(mcpServer.getTools().values()).map(tool => ({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema
+        }));
+        
         return res.json({
           jsonrpc: "2.0",
           id: id,
-          result: toolsResult
+          result: { tools }
         });
 
       case 'tools/call':
         console.log('🛠️ Tool call via HTTP:', params?.name);
-        // Call the handler directly  
-        const callResult = await callHandler({
-          params: params || {}
-        });
+        
+        if (!params?.name) {
+          return res.json({
+            jsonrpc: "2.0",
+            id: id,
+            error: {
+              code: -32602,
+              message: "Missing tool name"
+            }
+          });
+        }
+        
+        // Call the tool using the mcpServer
+        const tool = mcpServer.getTools().get(params.name);
+        if (!tool) {
+          return res.json({
+            jsonrpc: "2.0",
+            id: id,
+            error: {
+              code: -32601,
+              message: `Tool not found: ${params.name}`
+            }
+          });
+        }
+        
+        const result = await tool.handler(params.arguments || {});
+        
         return res.json({
           jsonrpc: "2.0",
           id: id,
-          result: callResult
+          result: result
         });
 
       default:
@@ -604,21 +543,20 @@ app.post('/', async (req, res) => {
   }
 });
 
-// Start the MCP server for stdio transport (for local usage)
-async function runMCPServer() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.log("🔧 MCP Server running on stdio transport");
-}
-
 // Handle process termination
 process.on('SIGINT', async () => {
   console.log('Shutting down server...');
-  await server.close();
+  await mcpServer.close();
   process.exit(0);
 });
 
 // Only start MCP stdio server if explicitly requested
 if (process.argv.includes('--mcp')) {
+  async function runMCPServer() {
+    const transport = new StdioServerTransport();
+    await mcpServer.connect(transport);
+    console.log("🔧 MCP Server running on stdio transport");
+  }
+  
   runMCPServer().catch(console.error);
 }
