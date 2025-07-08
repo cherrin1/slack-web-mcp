@@ -270,6 +270,24 @@ app.get('/info', (req, res) => {
   });
 });
 
+// Debug endpoint to test tools
+app.get('/debug/tools', async (req, res) => {
+  try {
+    const toolsResult = await server.requestHandlers.get(ListToolsRequestSchema.properties.method.const)({
+      params: {}
+    });
+    res.json({
+      success: true,
+      tools: toolsResult
+    });
+  } catch (error) {
+    res.json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // Helper function to get Slack client
 function getSlackClient(teamId, userId) {
   const tokenKey = `${teamId}:${userId}`;
@@ -300,7 +318,7 @@ const server = new Server(
 
 // List tools handler
 server.setRequestHandler(ListToolsRequestSchema, async () => {
-  console.log('🔧 Tools list requested');
+  console.log('🔧 Tools list requested - returning 3 tools');
   return {
     tools: [
       {
@@ -478,7 +496,7 @@ app.post('/', async (req, res) => {
   // Handle initialize without auth
   if (method === 'initialize') {
     console.log('🚀 Initialize request received');
-    return res.json({
+    const initResult = {
       jsonrpc: "2.0",
       id: id,
       result: {
@@ -491,7 +509,9 @@ app.post('/', async (req, res) => {
           version: "1.0.0"
         }
       }
-    });
+    };
+    console.log('🚀 Initialize response:', JSON.stringify(initResult, null, 2));
+    return res.json(initResult);
   }
 
   // Check authentication for other MCP requests
@@ -531,11 +551,12 @@ app.post('/', async (req, res) => {
         return res.status(200).send('');
 
       case 'tools/list':
-        console.log('🔧 Tools list requested via HTTP');
+        console.log('🔧 Tools list requested via HTTP - calling handler');
         // Call the server's handler directly
         const toolsResult = await server.requestHandlers.get(ListToolsRequestSchema.properties.method.const)({
           params: params || {}
         });
+        console.log('🔧 Tools list result:', JSON.stringify(toolsResult, null, 2));
         return res.json({
           jsonrpc: "2.0",
           id: id,
