@@ -309,7 +309,9 @@ const server = new Server(
   },
   {
     capabilities: {
-      tools: {},
+      tools: {
+        listChanged: true
+      },
     },
   }
 );
@@ -505,7 +507,9 @@ app.post('/', async (req, res) => {
       result: {
         protocolVersion: "2024-11-05",
         capabilities: {
-          tools: {}
+          tools: {
+            listChanged: true
+          }
         },
         serverInfo: {
           name: "slack-user-token-server",
