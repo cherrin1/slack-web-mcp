@@ -373,6 +373,73 @@ app.get('/oauth/callback', async (req, res) => {
   }
 });
 
+// Debug endpoint to test tools without MCP protocol
+app.get('/debug/tools', async (req, res) => {
+  try {
+    // Get first available Slack token
+    const availableTokens = Array.from(userTokens.entries())
+      .filter(([key, value]) => key.includes(':') && value.access_token);
+    
+    if (availableTokens.length === 0) {
+      return res.json({
+        error: 'No Slack tokens available',
+        message: 'Please authenticate via /oauth/slack first'
+      });
+    }
+    
+    const tokenData = availableTokens[0][1];
+    const mcpServer = createMCPServer(tokenData);
+    
+    // Simulate tools/list request
+    const tools = [
+      {
+        name: "slack_send_message",
+        description: "Send a message to a Slack channel or user",
+        inputSchema: {
+          type: "object",
+          properties: {
+            channel: { type: "string", description: "Channel ID or name" },
+            text: { type: "string", description: "Message text" }
+          },
+          required: ["channel", "text"]
+        }
+      },
+      {
+        name: "slack_get_channels",
+        description: "Get list of channels the user has access to",
+        inputSchema: { type: "object", properties: {} }
+      },
+      {
+        name: "slack_get_messages",
+        description: "Get messages from a channel",
+        inputSchema: {
+          type: "object",
+          properties: {
+            channel: { type: "string", description: "Channel ID" },
+            limit: { type: "number", description: "Number of messages" }
+          },
+          required: ["channel"]
+        }
+      }
+    ];
+    
+    res.json({
+      success: true,
+      tools: tools,
+      token_info: {
+        team_id: tokenData.team_id,
+        user_id: tokenData.user_id,
+        team_name: tokenData.team_name
+      }
+    });
+  } catch (error) {
+    res.json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ 
