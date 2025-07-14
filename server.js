@@ -55,53 +55,7 @@ function createMCPServer(tokenData) {
     version: "1.0.0"
   });
 
-// MCP Token endpoint for Claude
-app.post('/token', express.json(), (req, res) => {
-  const { code, state } = req.body;
-  
-  console.log('Token request from Claude:', { code: !!code, state });
-  
-  if (!code) {
-    return res.status(400).json({ 
-      error: 'invalid_request', 
-      error_description: 'Missing authorization code' 
-    });
-  }
-  
-  // Look up the stored auth mapping
-  const authMapping = userTokens.get(`claude_auth_${code}`);
-  
-  if (!authMapping) {
-    return res.status(400).json({ 
-      error: 'invalid_grant', 
-      error_description: 'Authorization code not found or expired' 
-    });
-  }
-  
-  // Clean up the auth code
-  userTokens.delete(`claude_auth_${code}`);
-  
-  // Create a longer-lived access token for Claude
-  const accessToken = `mcp_${authMapping.team_id}_${authMapping.user_id}_${Date.now()}`;
-  
-  // Store the mapping between MCP token and Slack credentials
-  userTokens.set(accessToken, {
-    team_id: authMapping.team_id,
-    user_id: authMapping.user_id,
-    created_at: new Date().toISOString()
-  });
-  
-  console.log('Issued MCP token for Claude:', accessToken);
-  
-  res.json({
-    access_token: accessToken,
-    token_type: 'Bearer',
-    expires_in: 3600,
-    scope: 'slack:read slack:write'
-  });
-});
-
-  // Register Slack tools
+  // Tool 1: Send message to channel
   server.registerTool(
     "slack_send_message",
     {
@@ -534,6 +488,63 @@ ${tokenData.scope || 'channels:read, chat:write, users:read, etc.'}`
   return server;
 }
 
+// Get the appropriate user token data for MCP requests
+function getUserTokenData(authToken) {
+  const tokenMapping = userTokens.get(authToken);
+  if (!tokenMapping) {
+    return null;
+  }
+  
+  const tokenKey = `${tokenMapping.team_id}:${tokenMapping.user_id}`;
+  return userTokens.get(tokenKey);
+}
+
+// MCP Token endpoint for Claude
+app.post('/token', express.json(), (req, res) => {
+  const { code, state } = req.body;
+  
+  console.log('Token request from Claude:', { code: !!code, state });
+  
+  if (!code) {
+    return res.status(400).json({ 
+      error: 'invalid_request', 
+      error_description: 'Missing authorization code' 
+    });
+  }
+  
+  // Look up the stored auth mapping
+  const authMapping = userTokens.get(`claude_auth_${code}`);
+  
+  if (!authMapping) {
+    return res.status(400).json({ 
+      error: 'invalid_grant', 
+      error_description: 'Authorization code not found or expired' 
+    });
+  }
+  
+  // Clean up the auth code
+  userTokens.delete(`claude_auth_${code}`);
+  
+  // Create a longer-lived access token for Claude
+  const accessToken = `mcp_${authMapping.team_id}_${authMapping.user_id}_${Date.now()}`;
+  
+  // Store the mapping between MCP token and Slack credentials
+  userTokens.set(accessToken, {
+    team_id: authMapping.team_id,
+    user_id: authMapping.user_id,
+    created_at: new Date().toISOString()
+  });
+  
+  console.log('Issued MCP token for Claude:', accessToken);
+  
+  res.json({
+    access_token: accessToken,
+    token_type: 'Bearer',
+    expires_in: 3600,
+    scope: 'slack:read slack:write'
+  });
+});
+
 // Alternative: Skip OAuth for Claude web - use pre-authenticated tokens
 app.get('/simple-auth', async (req, res) => {
   // For Claude web, provide a simplified authentication flow
@@ -803,43 +814,23 @@ app.get('/debug/tools', async (req, res) => {
     }
     
     const tokenData = availableTokens[0][1];
-    const mcpServer = createMCPServer(tokenData);
     
-    // Simulate tools/list request
+    // Show all 9 tools
     const tools = [
-      {
-        name: "slack_send_message",
-        description: "Send a message to a Slack channel or user",
-        inputSchema: {
-          type: "object",
-          properties: {
-            channel: { type: "string", description: "Channel ID or name" },
-            text: { type: "string", description: "Message text" }
-          },
-          required: ["channel", "text"]
-        }
-      },
-      {
-        name: "slack_get_channels",
-        description: "Get list of channels the user has access to",
-        inputSchema: { type: "object", properties: {} }
-      },
-      {
-        name: "slack_get_messages",
-        description: "Get messages from a channel",
-        inputSchema: {
-          type: "object",
-          properties: {
-            channel: { type: "string", description: "Channel ID" },
-            limit: { type: "number", description: "Number of messages" }
-          },
-          required: ["channel"]
-        }
-      }
+      { name: "slack_send_message", description: "Send a message to a Slack channel or user" },
+      { name: "slack_send_dm", description: "Send a direct message to a specific user" },
+      { name: "slack_get_channels", description: "Get list of channels the user has access to" },
+      { name: "slack_get_users", description: "Get list of users in the workspace" },
+      { name: "slack_get_workspace_info", description: "Get information about the current workspace" },
+      { name: "slack_get_messages", description: "Get messages from a channel or DM" },
+      { name: "slack_search_messages", description: "Search for messages across the workspace" },
+      { name: "slack_get_user_info", description: "Get detailed information about a specific user" },
+      { name: "slack_get_channel_info", description: "Get detailed information about a specific channel" }
     ];
     
     res.json({
       success: true,
+      tools_count: tools.length,
       tools: tools,
       token_info: {
         team_id: tokenData.team_id,
@@ -889,7 +880,8 @@ app.get('/info', (req, res) => {
       simple_auth: `${baseUrl}/simple-auth`,
       oauth_slack: `${baseUrl}/oauth/slack`,
       mcp_endpoint: `${baseUrl}/mcp`,
-      health_check: `${baseUrl}/health`
+      health_check: `${baseUrl}/health`,
+      debug_tools: `${baseUrl}/debug/tools`
     },
     instructions: {
       for_claude_web: [
