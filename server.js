@@ -55,6 +55,52 @@ function createMCPServer(tokenData) {
     version: "1.0.0"
   });
 
+// MCP Token endpoint for Claude
+app.post('/token', express.json(), (req, res) => {
+  const { code, state } = req.body;
+  
+  console.log('Token request from Claude:', { code: !!code, state });
+  
+  if (!code) {
+    return res.status(400).json({ 
+      error: 'invalid_request', 
+      error_description: 'Missing authorization code' 
+    });
+  }
+  
+  // Look up the stored auth mapping
+  const authMapping = userTokens.get(`claude_auth_${code}`);
+  
+  if (!authMapping) {
+    return res.status(400).json({ 
+      error: 'invalid_grant', 
+      error_description: 'Authorization code not found or expired' 
+    });
+  }
+  
+  // Clean up the auth code
+  userTokens.delete(`claude_auth_${code}`);
+  
+  // Create a longer-lived access token for Claude
+  const accessToken = `mcp_${authMapping.team_id}_${authMapping.user_id}_${Date.now()}`;
+  
+  // Store the mapping between MCP token and Slack credentials
+  userTokens.set(accessToken, {
+    team_id: authMapping.team_id,
+    user_id: authMapping.user_id,
+    created_at: new Date().toISOString()
+  });
+  
+  console.log('Issued MCP token for Claude:', accessToken);
+  
+  res.json({
+    access_token: accessToken,
+    token_type: 'Bearer',
+    expires_in: 3600,
+    scope: 'slack:read slack:write'
+  });
+});
+
   // Register Slack tools
   server.registerTool(
     "slack_send_message",
@@ -177,6 +223,36 @@ function createMCPServer(tokenData) {
   return server;
 }
 
+// MCP Authorization endpoint for Claude
+app.get('/authorize', (req, res) => {
+  const { state, redirect_uri } = req.query;
+  
+  if (!state || !redirect_uri) {
+    return res.status(400).json({ 
+      error: 'Missing required parameters', 
+      details: 'state and redirect_uri are required' 
+    });
+  }
+  
+  // Store Claude's redirect info to use after Slack auth
+  const authSession = {
+    claude_state: state,
+    claude_redirect_uri: redirect_uri,
+    timestamp: Date.now()
+  };
+  
+  // Store session (in production, use proper session storage)
+  const sessionKey = crypto.randomBytes(16).toString('hex');
+  userTokens.set(`auth_${sessionKey}`, authSession);
+  
+  // Redirect to Slack OAuth with session key
+  const baseUrl = getBaseUrl(req);
+  const slackOAuthUrl = `${baseUrl}/oauth/slack?auth_session=${sessionKey}`;
+  
+  console.log('Redirecting to Slack OAuth:', slackOAuthUrl);
+  res.redirect(slackOAuthUrl);
+});
+
 // OAuth endpoints
 app.get('/oauth/slack', (req, res) => {
   const baseUrl = getBaseUrl(req);
@@ -185,7 +261,10 @@ app.get('/oauth/slack', (req, res) => {
   console.log('OAuth request - Base URL:', baseUrl);
   console.log('OAuth request - Redirect URI:', redirectUri);
   
-  const state = crypto.randomBytes(16).toString('hex');
+  // Get auth session from query params
+  const authSession = req.query.auth_session;
+  
+  const state = authSession || crypto.randomBytes(16).toString('hex');
   const scopes = 'channels:read chat:write users:read';
   
   const authUrl = `https://slack.com/oauth/v2/authorize?client_id=${SLACK_CLIENT_ID}&user_scope=${encodeURIComponent(scopes)}&state=${state}&redirect_uri=${encodeURIComponent(redirectUri)}`;
@@ -251,15 +330,42 @@ app.get('/oauth/callback', async (req, res) => {
     
     console.log('Slack token stored for:', tokenKey);
     
-    res.json({ 
-      success: true, 
-      message: 'Successfully authenticated with Slack',
-      team: data.team.name,
-      user: data.authed_user.name || 'Unknown',
-      team_id: teamId,
-      user_id: userId,
-      next_step: 'You can now connect this server to Claude using the MCP endpoint'
-    });
+    // Check if this was initiated from Claude
+    const authSession = userTokens.get(`auth_${state}`);
+    
+    if (authSession) {
+      // This was initiated from Claude - redirect back to Claude
+      console.log('Redirecting back to Claude:', authSession.claude_redirect_uri);
+      
+      // Clean up the session
+      userTokens.delete(`auth_${state}`);
+      
+      // Create an authorization code for Claude
+      const claudeAuthCode = crypto.randomBytes(32).toString('hex');
+      
+      // Store the mapping between auth code and user token
+      userTokens.set(`claude_auth_${claudeAuthCode}`, {
+        team_id: teamId,
+        user_id: userId,
+        created_at: new Date().toISOString()
+      });
+      
+      // Redirect back to Claude with authorization code
+      const claudeCallbackUrl = `${authSession.claude_redirect_uri}?code=${claudeAuthCode}&state=${authSession.claude_state}`;
+      
+      return res.redirect(claudeCallbackUrl);
+    } else {
+      // Direct Slack auth - show success message
+      res.json({ 
+        success: true, 
+        message: 'Successfully authenticated with Slack',
+        team: data.team.name,
+        user: data.authed_user.name || 'Unknown',
+        team_id: teamId,
+        user_id: userId,
+        next_step: 'You can now connect this server to Claude using the MCP endpoint'
+      });
+    }
     
   } catch (error) {
     console.error('OAuth callback error:', error);
@@ -336,23 +442,28 @@ app.post('/mcp', async (req, res) => {
       
       mcpTransports.set(sessionId, transport);
       
-      // For authentication, we need to determine which Slack user this is for
-      // This is a simplified approach - in production, you'd want better user mapping
-      const firstTokenData = Array.from(userTokens.values())[0];
+      // For authenticated requests, get user token data
+      const authHeader = req.headers.authorization;
+      let tokenData = null;
       
-      if (!firstTokenData) {
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.substring(7);
+        tokenData = getUserTokenData(token);
+      }
+      
+      if (!tokenData) {
         return res.status(401).json({
           jsonrpc: '2.0',
           error: {
             code: -32000,
-            message: 'No Slack authentication found. Please authenticate via /oauth/slack first.'
+            message: 'No valid Slack authentication found. Please authenticate via /oauth/slack first.'
           },
           id: req.body?.id || null
         });
       }
       
       // Create MCP server with the user's token
-      const mcpServer = createMCPServer(firstTokenData);
+      const mcpServer = createMCPServer(tokenData);
       
       // Connect server to transport
       await mcpServer.connect(transport);
