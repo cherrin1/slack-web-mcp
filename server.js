@@ -426,52 +426,75 @@ app.post('/mcp', async (req, res) => {
     const sessionId = req.headers['mcp-session-id'] || randomUUID();
     let transport = mcpTransports.get(sessionId);
     
-    if (!transport) {
-      // Create new transport for this session
-      transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => sessionId,
-        onsessioninitialized: (sid) => {
-          console.log('📡 MCP session initialized:', sid);
-        }
-      });
+    // Handle initialize request without authentication
+    if (req.body?.method === 'initialize') {
+      console.log('🚀 Initialize request - creating new transport');
       
-      transport.onclose = () => {
-        console.log('📡 MCP session closed:', sessionId);
-        mcpTransports.delete(sessionId);
-      };
-      
-      mcpTransports.set(sessionId, transport);
-      
-      // For authenticated requests, get user token data
-      const authHeader = req.headers.authorization;
-      let tokenData = null;
-      
-      if (authHeader && authHeader.startsWith('Bearer ')) {
-        const token = authHeader.substring(7);
-        tokenData = getUserTokenData(token);
-      }
-      
-      if (!tokenData) {
-        return res.status(401).json({
-          jsonrpc: '2.0',
-          error: {
-            code: -32000,
-            message: 'No valid Slack authentication found. Please authenticate via /oauth/slack first.'
-          },
-          id: req.body?.id || null
+      if (!transport) {
+        // Create new transport for this session
+        transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => sessionId,
+          onsessioninitialized: (sid) => {
+            console.log('📡 MCP session initialized:', sid);
+          }
         });
+        
+        transport.onclose = () => {
+          console.log('📡 MCP session closed:', sessionId);
+          mcpTransports.delete(sessionId);
+        };
+        
+        mcpTransports.set(sessionId, transport);
+        
+        // For initialize, we need to check if we have any Slack tokens available
+        // Use the first available token for now (in production, you'd want better user mapping)
+        const availableTokens = Array.from(userTokens.entries())
+          .filter(([key, value]) => key.includes(':') && value.access_token);
+        
+        if (availableTokens.length === 0) {
+          console.log('❌ No Slack tokens available - user needs to authenticate first');
+          return res.status(401).json({
+            jsonrpc: '2.0',
+            error: {
+              code: -32000,
+              message: 'No Slack authentication found. Please authenticate via /oauth/slack first.'
+            },
+            id: req.body?.id || null
+          });
+        }
+        
+        // Use the first available token
+        const tokenData = availableTokens[0][1];
+        console.log('✅ Using Slack token for team:', tokenData.team_id, 'user:', tokenData.user_id);
+        
+        // Create MCP server with the user's token
+        const mcpServer = createMCPServer(tokenData);
+        
+        // Connect server to transport
+        await mcpServer.connect(transport);
+        
+        console.log('✅ MCP server connected for session:', sessionId);
       }
       
-      // Create MCP server with the user's token
-      const mcpServer = createMCPServer(tokenData);
-      
-      // Connect server to transport
-      await mcpServer.connect(transport);
-      
-      console.log('✅ MCP server connected for session:', sessionId);
+      // Handle the initialize request
+      await transport.handleRequest(req, res, req.body);
+      return;
     }
     
-    // Handle the request through the transport
+    // For other requests, check if transport exists
+    if (!transport) {
+      console.log('❌ No transport found for session:', sessionId);
+      return res.status(400).json({
+        jsonrpc: '2.0',
+        error: {
+          code: -32000,
+          message: 'Session not found. Please initialize first.'
+        },
+        id: req.body?.id || null
+      });
+    }
+    
+    // Handle the request through the existing transport
     await transport.handleRequest(req, res, req.body);
     
   } catch (error) {
@@ -480,7 +503,8 @@ app.post('/mcp', async (req, res) => {
       jsonrpc: '2.0',
       error: {
         code: -32603,
-        message: 'Internal server error'
+        message: 'Internal server error',
+        details: error.message
       },
       id: req.body?.id || null
     });
