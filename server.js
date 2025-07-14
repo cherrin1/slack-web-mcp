@@ -715,12 +715,23 @@ app.get('/oauth/callback', async (req, res) => {
     const teamId = data.team.id;
     const tokenKey = `${teamId}:${userId}`;
     
+    // Try to get a better user name by calling the Slack API
+    let userName = data.authed_user.name || 'Unknown';
+    try {
+      const tempSlack = new WebClient(data.authed_user.access_token);
+      const userInfo = await tempSlack.users.info({ user: userId });
+      userName = userInfo.user.real_name || userInfo.user.name || userInfo.user.profile?.display_name || data.authed_user.name || `User_${userId.substring(0, 8)}`;
+    } catch (e) {
+      console.log('Could not fetch user details, using fallback name');
+      userName = data.authed_user.name || `User_${userId.substring(0, 8)}`;
+    }
+
     const tokenData = {
       access_token: data.authed_user.access_token,
       team_id: teamId,
       user_id: userId,
       team_name: data.team.name,
-      user_name: data.authed_user.name || 'Unknown',
+      user_name: userName,
       scope: data.authed_user.scope,
       created_at: new Date().toISOString()
     };
@@ -779,7 +790,7 @@ app.get('/oauth/callback', async (req, res) => {
             <div class="highlight">
               <strong>Your Details:</strong><br>
               <strong>Workspace:</strong> ${data.team.name}<br>
-              <strong>User:</strong> ${data.authed_user.name || 'Unknown'}<br>
+              <strong>User:</strong> ${userName}<br>
               <strong>Permissions:</strong> ${data.authed_user.scope.split(',').length} scopes
             </div>
             <div class="spinner"></div>
@@ -802,7 +813,7 @@ app.get('/oauth/callback', async (req, res) => {
         message: 'Successfully authenticated with Slack',
         user_data: {
           team: data.team.name,
-          user: data.authed_user.name || 'Unknown',
+          user: userName,
           team_id: teamId,
           user_id: userId,
           scopes: data.authed_user.scope.split(',').length
