@@ -505,11 +505,11 @@ function createMCPServer(tokenData, sessionId) {
   return server;
 }
 
-// MCP Token endpoint for Claude
+// Enhanced MCP Token endpoint - user-specific tokens
 app.post('/token', express.json(), (req, res) => {
   const { code, state } = req.body;
   
-  console.log('Token request from Claude:', { code: !!code, state });
+  console.log('Token exchange request from Claude:', { code: !!code, state });
   
   if (!code) {
     return res.status(400).json({ 
@@ -518,8 +518,8 @@ app.post('/token', express.json(), (req, res) => {
     });
   }
   
-  // Look up the stored auth mapping
-  const authMapping = userTokens.get(`claude_auth_${code}`);
+  // Look up the auth mapping with user context
+  const authMapping = claudeTokens.get(`claude_auth_${code}`);
   
   if (!authMapping) {
     return res.status(400).json({ 
@@ -529,25 +529,31 @@ app.post('/token', express.json(), (req, res) => {
   }
   
   // Clean up the auth code
-  userTokens.delete(`claude_auth_${code}`);
+  claudeTokens.delete(`claude_auth_${code}`);
   
-  // Create a longer-lived access token for Claude
-  const accessToken = `mcp_${authMapping.team_id}_${authMapping.user_id}_${Date.now()}`;
+  // Create user-specific access token with Claude user context
+  const accessToken = `mcp_${authMapping.claude_user_id}_${authMapping.team_id}_${authMapping.user_id}_${Date.now()}`;
   
-  // Store the mapping between MCP token and Slack credentials
+  // Store the mapping for this specific Claude user
   claudeTokens.set(accessToken, {
     team_id: authMapping.team_id,
     user_id: authMapping.user_id,
+    claude_user_id: authMapping.claude_user_id,
     created_at: new Date().toISOString()
   });
   
-  console.log(`🎫 Issued MCP token for ${authMapping.team_id}:${authMapping.user_id}`);
+  console.log(`🎫 Issued individual MCP token for Claude user ${authMapping.claude_user_id} → Slack ${authMapping.team_id}:${authMapping.user_id}`);
   
   res.json({
     access_token: accessToken,
     token_type: 'Bearer',
     expires_in: 3600,
-    scope: 'slack:read slack:write'
+    scope: 'slack:read slack:write',
+    user_context: {
+      claude_user_id: authMapping.claude_user_id,
+      slack_team_id: authMapping.team_id,
+      slack_user_id: authMapping.user_id
+    }
   });
 });
 
@@ -582,7 +588,7 @@ app.get('/simple-auth', async (req, res) => {
         <h1>🔐 Slack MCP Server Setup</h1>
         
         <div class="info">
-          <strong>✨ Multi-User Support:</strong> Each person can connect their own Slack account. Your tokens are stored separately and securely.
+          <strong>🔒 Secure Individual Access:</strong> Each person must authenticate with their own Slack account. No shared access allowed.
         </div>
         
         <div class="step">
@@ -612,14 +618,14 @@ app.get('/simple-auth', async (req, res) => {
           </span>
         </p>
         
-        <p><small>Each user's Slack token is stored separately. Multiple people can use this server without interfering with each other.</small></p>
+        <p><small>⚠️ Each user must authenticate individually. You cannot use someone else's Slack connection.</small></p>
       </div>
     </body>
     </html>
   `);
 });
 
-// MCP Authorization endpoint for Claude
+// MCP Authorization endpoint for Claude - now user-specific
 app.get('/authorize', (req, res) => {
   const { state, redirect_uri } = req.query;
   
@@ -630,26 +636,30 @@ app.get('/authorize', (req, res) => {
     });
   }
   
-  // Store Claude's redirect info to use after Slack auth
+  // Generate unique identifier for this Claude user session
+  const claudeUserId = `claude_${crypto.randomBytes(16).toString('hex')}`;
+  
+  // Store Claude's redirect info with user identifier
   const authSession = {
+    claude_user_id: claudeUserId,
     claude_state: state,
     claude_redirect_uri: redirect_uri,
     timestamp: Date.now()
   };
   
-  // Store session (in production, use proper session storage)
-  const sessionKey = crypto.randomBytes(16).toString('hex');
-  userTokens.set(`auth_${sessionKey}`, authSession);
+  // Store session with unique key
+  const sessionKey = `auth_${claudeUserId}_${crypto.randomBytes(8).toString('hex')}`;
+  userTokens.set(sessionKey, authSession);
   
-  // Redirect to Slack OAuth with session key
+  // Redirect to Slack OAuth with user context
   const baseUrl = getBaseUrl(req);
-  const slackOAuthUrl = `${baseUrl}/oauth/slack?auth_session=${sessionKey}`;
+  const slackOAuthUrl = `${baseUrl}/oauth/slack?auth_session=${sessionKey}&claude_user=${claudeUserId}`;
   
-  console.log('Redirecting to Slack OAuth:', slackOAuthUrl);
+  console.log(`🔐 Claude user ${claudeUserId} starting OAuth flow`);
   res.redirect(slackOAuthUrl);
 });
 
-// OAuth endpoints
+// OAuth endpoints with user context
 app.get('/oauth/slack', (req, res) => {
   const baseUrl = getBaseUrl(req);
   const redirectUri = `${baseUrl}/oauth/callback`;
@@ -657,15 +667,16 @@ app.get('/oauth/slack', (req, res) => {
   console.log('OAuth request - Base URL:', baseUrl);
   console.log('OAuth request - Redirect URI:', redirectUri);
   
-  // Get auth session from query params
+  // Get auth session and user context from query params
   const authSession = req.query.auth_session;
+  const claudeUser = req.query.claude_user;
   
   const state = authSession || crypto.randomBytes(16).toString('hex');
   const scopes = 'channels:read chat:write users:read channels:history im:history mpim:history search:read groups:read mpim:read channels:write groups:write im:write';
   
   const authUrl = `https://slack.com/oauth/v2/authorize?client_id=${SLACK_CLIENT_ID}&user_scope=${encodeURIComponent(scopes)}&state=${state}&redirect_uri=${encodeURIComponent(redirectUri)}`;
   
-  console.log('Auth URL:', authUrl);
+  console.log(`🔗 OAuth redirect for Claude user ${claudeUser || 'unknown'}:`, authUrl);
   res.redirect(authUrl);
 });
 
@@ -740,57 +751,65 @@ app.get('/oauth/callback', async (req, res) => {
     console.log(`✅ Slack token stored for user: ${tokenData.user_name} (${tokenKey})`);
     
     // Check if this was initiated from Claude
-    const authSession = userTokens.get(`auth_${state}`);
+    const authSession = userTokens.get(state);
     
-    if (authSession) {
-      // This was initiated from Claude - redirect back to Claude
-      console.log('Redirecting back to Claude:', authSession.claude_redirect_uri);
+    if (authSession && authSession.claude_user_id) {
+      // This was initiated from Claude - redirect back to Claude with user-specific token
+      console.log(`Redirecting Claude user ${authSession.claude_user_id} back to Claude`);
       
       // Clean up the session
-      userTokens.delete(`auth_${state}`);
+      userTokens.delete(state);
       
-      // Create an authorization code for Claude
+      // Create an authorization code for Claude with user context
       const claudeAuthCode = crypto.randomBytes(32).toString('hex');
       
-      // Store the mapping between auth code and user token
-      userTokens.set(`claude_auth_${claudeAuthCode}`, {
+      // Store the mapping between auth code and SPECIFIC user token
+      claudeTokens.set(`claude_auth_${claudeAuthCode}`, {
         team_id: teamId,
         user_id: userId,
+        claude_user_id: authSession.claude_user_id,
         created_at: new Date().toISOString()
       });
       
       // Redirect back to Claude with authorization code
       const claudeCallbackUrl = `${authSession.claude_redirect_uri}?code=${claudeAuthCode}&state=${authSession.claude_state}`;
       
-      console.log('Redirecting back to Claude with callback URL:', claudeCallbackUrl);
+      console.log(`Redirecting Claude user ${authSession.claude_user_id} back with callback URL`);
       
-      // Instead of a direct redirect, show a success page with auto-redirect
+      // Show success page with user-specific information
       return res.send(`
         <!DOCTYPE html>
         <html>
         <head>
-          <title>Authentication Successful</title>
+          <title>Individual Authentication Successful</title>
           <meta charset="utf-8">
           <meta name="viewport" content="width=device-width, initial-scale=1">
           <style>
             body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; text-align: center; padding: 50px; background: #f5f5f5; }
-            .container { max-width: 400px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+            .container { max-width: 450px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
             .success { color: #28a745; font-size: 18px; margin-bottom: 20px; }
             .info { color: #666; margin-bottom: 20px; }
             .button { display: inline-block; padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 5px; }
             .spinner { border: 2px solid #f3f3f3; border-top: 2px solid #007bff; border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; margin: 20px auto; }
             @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
             .highlight { background: #e7f3ff; padding: 10px; border-radius: 5px; margin: 10px 0; }
+            .security { background: #d4edda; border: 1px solid #c3e6cb; padding: 10px; border-radius: 5px; margin: 10px 0; }
           </style>
         </head>
         <body>
           <div class="container">
-            <h1>✅ Your Slack Account Connected!</h1>
-            <div class="success">Authentication successful for your personal account.</div>
+            <h1>✅ Your Personal Slack Connection!</h1>
+            <div class="success">Your individual Slack account has been connected to Claude.</div>
+            
+            <div class="security">
+              <strong>🔒 Private Connection:</strong> This connection is yours alone. Other Claude users cannot access your Slack account.
+            </div>
+            
             <div class="highlight">
-              <strong>Your Details:</strong><br>
+              <strong>Your Connection Details:</strong><br>
               <strong>Workspace:</strong> ${data.team.name}<br>
-              <strong>User:</strong> ${userName}<br>
+              <strong>Your Name:</strong> ${userName}<br>
+              <strong>Claude User:</strong> ${authSession.claude_user_id.substring(0, 12)}...<br>
               <strong>Permissions:</strong> ${data.authed_user.scope.split(',').length} scopes
             </div>
             <div class="spinner"></div>
@@ -895,11 +914,11 @@ app.get('/info', (req, res) => {
       health_check: `${baseUrl}/health`
     },
     features: [
-      "🔒 Individual user authentication",
-      "🔐 Separate Slack tokens per user",
-      "👥 Multi-user support", 
+      "🔒 Individual authentication required",
+      "🚫 No shared or fallback tokens",
+      "👤 Each user must connect their own Slack", 
       "📊 User activity tracking",
-      "🎫 Secure token management"
+      "🎫 Secure token isolation"
     ]
   });
 });
@@ -931,44 +950,41 @@ app.post('/mcp', async (req, res) => {
       console.log('🚀 Initialize request - session:', sessionId);
       
       if (!transport) {
-        // Get user token data with preference order:
-        // 1. From Authorization header (if provided)
-        // 2. From stored session user
-        // 3. Most recently created token
+        // Get user token data - NO FALLBACKS, user must authenticate themselves
         let tokenData = null;
         
         const authHeader = req.headers.authorization;
         if (authHeader && authHeader.startsWith('Bearer ')) {
           const token = authHeader.substring(7);
           tokenData = getUserTokenData(token);
-          console.log('🎫 Using token from Authorization header');
-        }
-        
-        if (!tokenData && sessionUsers.has(sessionId)) {
-          tokenData = sessionUsers.get(sessionId);
-          console.log('🔄 Reusing session user');
-        }
-        
-        if (!tokenData) {
-          // Use most recently created token
-          const availableTokens = Array.from(userTokens.entries())
-            .filter(([key, value]) => key.includes(':') && value.access_token)
-            .sort(([,a], [,b]) => new Date(b.created_at) - new Date(a.created_at));
           
-          if (availableTokens.length === 0) {
-            console.log('❌ No user tokens available');
+          if (tokenData) {
+            console.log(`🎫 Using authenticated token for ${tokenData.user_name}`);
+          } else {
+            console.log('❌ Invalid or expired token provided');
             return res.status(401).json({
               jsonrpc: '2.0',
               error: {
                 code: -32000,
-                message: 'No user authentication found. Please authenticate via /simple-auth first.'
+                message: 'Invalid or expired authentication token. Please re-authenticate via /simple-auth.'
               },
               id: req.body?.id || null
             });
           }
-          
-          tokenData = availableTokens[0][1];
-          console.log('🔄 Using most recent token');
+        } else if (sessionUsers.has(sessionId)) {
+          tokenData = sessionUsers.get(sessionId);
+          console.log(`🔄 Reusing session for ${tokenData.user_name}`);
+        } else {
+          // NO FALLBACK - user must authenticate
+          console.log('❌ No authentication provided - user must authenticate');
+          return res.status(401).json({
+            jsonrpc: '2.0',
+            error: {
+              code: -32000,
+              message: 'Authentication required. Please authenticate with your own Slack account via /simple-auth first.'
+            },
+            id: req.body?.id || null
+          });
         }
         
         console.log(`✅ Creating session for user: ${tokenData.user_name} (${tokenData.team_name})`);
