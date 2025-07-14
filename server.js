@@ -223,6 +223,68 @@ app.post('/token', express.json(), (req, res) => {
   return server;
 }
 
+// Alternative: Skip OAuth for Claude web - use pre-authenticated tokens
+app.get('/simple-auth', async (req, res) => {
+  // For Claude web, provide a simplified authentication flow
+  const baseUrl = getBaseUrl(req);
+  const redirectUri = `${baseUrl}/oauth/callback`;
+  
+  const state = 'claude-web-' + crypto.randomBytes(16).toString('hex');
+  const scopes = 'channels:read chat:write users:read';
+  
+  const authUrl = `https://slack.com/oauth/v2/authorize?client_id=${SLACK_CLIENT_ID}&user_scope=${encodeURIComponent(scopes)}&state=${state}&redirect_uri=${encodeURIComponent(redirectUri)}`;
+  
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Slack MCP Server Authentication</title>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; text-align: center; padding: 50px; background: #f5f5f5; }
+        .container { max-width: 500px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .button { display: inline-block; padding: 12px 24px; background: #4A154B; color: white; text-decoration: none; border-radius: 5px; margin: 10px; }
+        .step { margin: 20px 0; padding: 15px; background: #f8f9fa; border-radius: 5px; text-align: left; }
+        .code { background: #e9ecef; padding: 2px 6px; border-radius: 3px; font-family: monospace; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <h1>🔐 Slack MCP Server Setup</h1>
+        <p>Follow these steps to connect your Slack account to Claude:</p>
+        
+        <div class="step">
+          <strong>Step 1:</strong> Authenticate with Slack
+          <br><br>
+          <a href="${authUrl}" class="button">🔗 Connect to Slack</a>
+        </div>
+        
+        <div class="step">
+          <strong>Step 2:</strong> Configure Claude
+          <br><br>
+          After authenticating, use this URL in Claude:
+          <br><code class="code">${baseUrl}/mcp</code>
+        </div>
+        
+        <div class="step">
+          <strong>Step 3:</strong> Test the connection
+          <br><br>
+          In Claude, try: "List my Slack channels"
+        </div>
+        
+        <p><strong>Server Status:</strong> 
+          <span style="color: green;">✅ Online</span> | 
+          <span style="color: ${userTokens.size > 0 ? 'green' : 'orange'};">
+            ${userTokens.size > 0 ? '✅ Authenticated' : '⏳ Waiting for auth'}
+          </span>
+        </p>
+      </div>
+    </body>
+    </html>
+  `);
+});
+
 // MCP Authorization endpoint for Claude
 app.get('/authorize', (req, res) => {
   const { state, redirect_uri } = req.query;
@@ -353,7 +415,49 @@ app.get('/oauth/callback', async (req, res) => {
       // Redirect back to Claude with authorization code
       const claudeCallbackUrl = `${authSession.claude_redirect_uri}?code=${claudeAuthCode}&state=${authSession.claude_state}`;
       
-      return res.redirect(claudeCallbackUrl);
+      console.log('Redirecting back to Claude with callback URL:', claudeCallbackUrl);
+      
+      // Instead of a direct redirect, show a success page with auto-redirect
+      return res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Authentication Successful</title>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; text-align: center; padding: 50px; background: #f5f5f5; }
+            .container { max-width: 400px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+            .success { color: #28a745; font-size: 18px; margin-bottom: 20px; }
+            .info { color: #666; margin-bottom: 20px; }
+            .button { display: inline-block; padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 5px; }
+            .spinner { border: 2px solid #f3f3f3; border-top: 2px solid #007bff; border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; margin: 20px auto; }
+            @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <h1>✅ Authentication Successful!</h1>
+            <div class="success">Your Slack account has been connected successfully.</div>
+            <div class="info">
+              <strong>Team:</strong> ${data.team.name}<br>
+              <strong>User:</strong> ${data.authed_user.name || 'Unknown'}<br>
+              <strong>Team ID:</strong> ${teamId}<br>
+              <strong>User ID:</strong> ${userId}
+            </div>
+            <div class="spinner"></div>
+            <p>Redirecting back to Claude...</p>
+            <p><a href="${claudeCallbackUrl}" class="button">Continue to Claude</a></p>
+          </div>
+          <script>
+            // Auto-redirect after 3 seconds
+            setTimeout(() => {
+              window.location.href = "${claudeCallbackUrl}";
+            }, 3000);
+          </script>
+        </body>
+        </html>
+      `);
     } else {
       // Direct Slack auth - show success message
       res.json({ 
@@ -458,15 +562,35 @@ app.get('/info', (req, res) => {
     app_name: 'Slack MCP Server',
     version: '1.0.0',
     base_url: baseUrl,
-    oauth_url: `${baseUrl}/oauth/slack`,
-    mcp_endpoint: `${baseUrl}/mcp`,
-    health_url: `${baseUrl}/health`,
-    tokens_stored: userTokens.size,
-    active_sessions: mcpTransports.size,
+    status: 'online',
+    authentication: {
+      tokens_stored: userTokens.size,
+      active_sessions: mcpTransports.size,
+      slack_teams: Array.from(userTokens.entries())
+        .filter(([key, value]) => key.includes(':') && value.team_name)
+        .map(([key, value]) => ({
+          team_name: value.team_name,
+          user_name: value.user_name,
+          team_id: value.team_id
+        }))
+    },
+    endpoints: {
+      simple_auth: `${baseUrl}/simple-auth`,
+      oauth_slack: `${baseUrl}/oauth/slack`,
+      mcp_endpoint: `${baseUrl}/mcp`,
+      health_check: `${baseUrl}/health`
+    },
     instructions: {
-      step1: 'First authenticate with Slack by visiting /oauth/slack',
-      step2: 'Then connect Claude to this server using the /mcp endpoint',
-      step3: 'Provide your team_id and user_id when prompted by Claude'
+      for_claude_web: [
+        "1. Visit /simple-auth to authenticate with Slack",
+        "2. Add this server to Claude using the /mcp endpoint",
+        "3. Test with: 'List my Slack channels'"
+      ],
+      for_claude_desktop: [
+        "1. Use the /oauth/slack endpoint for full OAuth flow",
+        "2. Configure Claude Desktop to use /mcp endpoint",
+        "3. Enjoy full MCP integration"
+      ]
     }
   });
 });
