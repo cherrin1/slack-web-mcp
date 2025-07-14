@@ -52,7 +52,7 @@ function getUserTokenData(claudeToken) {
 // Create MCP server instance (enhanced for user context)
 function createMCPServer(tokenData, sessionId) {
   const server = new McpServer({
-    name: "slack-user-token-server",
+    name: "Slack MCP",
     version: "1.0.0"
   });
 

@@ -1,5 +1,5 @@
 {
-  "name": "slack-mcp-server",
+  "name": "Slack MCP",
   "version": "1.0.0",
   "description": "Slack User Token MCP Server for Claude Remote Integration",
   "main": "server.js",
