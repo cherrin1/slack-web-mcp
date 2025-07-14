@@ -138,30 +138,79 @@ app.post('/token', express.json(), (req, res) => {
     }
   );
 
+  // Tool 2: Send direct message
+  server.registerTool(
+    "slack_send_dm",
+    {
+      title: "Send Direct Message",
+      description: "Send a direct message to a specific user",
+      inputSchema: {
+        user: z.string().describe("User ID or @username to send DM to"),
+        text: z.string().describe("Message text to send")
+      }
+    },
+    async ({ user, text }) => {
+      try {
+        const slack = new WebClient(tokenData.access_token);
+        
+        // Open DM channel with user
+        const dmResult = await slack.conversations.open({
+          users: user.replace('@', '')
+        });
+        
+        const result = await slack.chat.postMessage({
+          channel: dmResult.channel.id,
+          text: text
+        });
+        
+        return {
+          content: [{
+            type: "text",
+            text: `✅ Direct message sent to ${user}!\n\nTimestamp: ${result.ts}\nChannel: ${result.channel}`
+          }]
+        };
+      } catch (error) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Failed to send DM: ${error.message}`
+          }],
+          isError: true
+        };
+      }
+    }
+  );
+
+  // Tool 3: Get channels (enhanced)
   server.registerTool(
     "slack_get_channels",
     {
       title: "Get Slack Channels",
       description: "Get list of channels the user has access to",
-      inputSchema: {}
+      inputSchema: {
+        types: z.string().optional().describe("Channel types to include (public_channel,private_channel,mpim,im)").default("public_channel,private_channel")
+      }
     },
-    async () => {
+    async ({ types = "public_channel,private_channel" }) => {
       try {
         const slack = new WebClient(tokenData.access_token);
         const channels = await slack.conversations.list({
-          types: "public_channel,private_channel",
-          limit: 100
+          types: types,
+          limit: 200
         });
         
         const channelList = channels.channels
-          .filter(ch => ch.is_member)
-          .map(ch => `• #${ch.name} (${ch.is_private ? 'private' : 'public'}) - ${ch.id}`)
+          .map(ch => {
+            const type = ch.is_private ? '🔒 Private' : '🌍 Public';
+            const members = ch.num_members ? ` (${ch.num_members} members)` : '';
+            return `• #${ch.name} ${type}${members} - ${ch.id}`;
+          })
           .join('\n');
         
         return {
           content: [{
             type: "text",
-            text: `📋 Your Slack channels:\n\n${channelList}`
+            text: `📋 Available channels:\n\n${channelList}`
           }]
         };
       } catch (error) {
@@ -176,13 +225,105 @@ app.post('/token', express.json(), (req, res) => {
     }
   );
 
+  // Tool 4: Get workspace users
+  server.registerTool(
+    "slack_get_users",
+    {
+      title: "Get Workspace Users",
+      description: "Get list of users in the workspace",
+      inputSchema: {
+        limit: z.number().optional().describe("Maximum number of users to return").default(50)
+      }
+    },
+    async ({ limit = 50 }) => {
+      try {
+        const slack = new WebClient(tokenData.access_token);
+        const users = await slack.users.list({
+          limit: limit
+        });
+        
+        const userList = users.members
+          .filter(user => !user.deleted && !user.is_bot)
+          .map(user => {
+            const status = user.presence || 'unknown';
+            const statusIcon = status === 'active' ? '🟢' : '⚪';
+            const realName = user.real_name || user.name;
+            return `• ${statusIcon} ${realName} (@${user.name}) - ${user.id}`;
+          })
+          .join('\n');
+        
+        return {
+          content: [{
+            type: "text",
+            text: `👥 Workspace users:\n\n${userList}`
+          }]
+        };
+      } catch (error) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Failed to get users: ${error.message}`
+          }],
+          isError: true
+        };
+      }
+    }
+  );
+
+  // Tool 5: Get workspace info
+  server.registerTool(
+    "slack_get_workspace_info",
+    {
+      title: "Get Workspace Info",
+      description: "Get information about the current workspace",
+      inputSchema: {}
+    },
+    async () => {
+      try {
+        const slack = new WebClient(tokenData.access_token);
+        const teamInfo = await slack.team.info();
+        const userInfo = await slack.users.info({ user: tokenData.user_id });
+        
+        return {
+          content: [{
+            type: "text",
+            text: `🏢 Workspace Information:
+
+**Workspace:** ${teamInfo.team.name}
+**Domain:** ${teamInfo.team.domain}.slack.com
+**ID:** ${teamInfo.team.id}
+
+**Your Profile:**
+**Name:** ${userInfo.user.real_name || userInfo.user.name}
+**Username:** @${userInfo.user.name}
+**Email:** ${userInfo.user.profile.email || 'Not available'}
+**Title:** ${userInfo.user.profile.title || 'Not set'}
+**Status:** ${userInfo.user.presence || 'unknown'}
+
+**Token Permissions:**
+${tokenData.scope || 'channels:read, chat:write, users:read, etc.'}`
+          }]
+        };
+      } catch (error) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Failed to get workspace info: ${error.message}`
+          }],
+          isError: true
+        };
+      }
+    }
+  );
+
+  // Tool 6: Get messages (enhanced)
   server.registerTool(
     "slack_get_messages",
     {
       title: "Get Slack Messages",
-      description: "Get messages from a channel",
+      description: "Get messages from a channel or DM",
       inputSchema: {
-        channel: z.string().describe("Channel ID"),
+        channel: z.string().describe("Channel ID or name"),
         limit: z.number().optional().describe("Number of messages to retrieve (max 100)").default(10)
       }
     },
@@ -194,18 +335,29 @@ app.post('/token', express.json(), (req, res) => {
           limit: Math.min(limit, 100)
         });
         
-        const messageList = messages.messages
-          .slice(0, 10)
-          .map(msg => {
-            const timestamp = new Date(parseInt(msg.ts) * 1000).toLocaleString();
-            return `[${timestamp}] ${msg.user}: ${msg.text || '(no text)'}`;
-          })
-          .join('\n');
+        const messageList = await Promise.all(
+          messages.messages
+            .slice(0, limit)
+            .map(async (msg) => {
+              const timestamp = new Date(parseInt(msg.ts) * 1000).toLocaleString();
+              let userName = msg.user;
+              
+              // Try to get user's real name
+              try {
+                const userInfo = await slack.users.info({ user: msg.user });
+                userName = userInfo.user.real_name || userInfo.user.name;
+              } catch (e) {
+                // Keep original user ID if lookup fails
+              }
+              
+              return `[${timestamp}] ${userName}: ${msg.text || '(no text)'}`;
+            })
+        );
         
         return {
           content: [{
             type: "text",
-            text: `💬 Recent messages from ${channel}:\n\n${messageList}`
+            text: `💬 Recent messages from ${channel}:\n\n${messageList.join('\n')}`
           }]
         };
       } catch (error) {
@@ -213,6 +365,165 @@ app.post('/token', express.json(), (req, res) => {
           content: [{
             type: "text",
             text: `❌ Failed to get messages: ${error.message}`
+          }],
+          isError: true
+        };
+      }
+    }
+  );
+
+  // Tool 7: Search messages
+  server.registerTool(
+    "slack_search_messages",
+    {
+      title: "Search Slack Messages",
+      description: "Search for messages across the workspace",
+      inputSchema: {
+        query: z.string().describe("Search query (e.g., 'from:@user', 'in:#channel', or just keywords)"),
+        limit: z.number().optional().describe("Number of results to return").default(10)
+      }
+    },
+    async ({ query, limit = 10 }) => {
+      try {
+        const slack = new WebClient(tokenData.access_token);
+        const results = await slack.search.messages({
+          query: query,
+          count: Math.min(limit, 20)
+        });
+        
+        if (!results.messages || results.messages.total === 0) {
+          return {
+            content: [{
+              type: "text",
+              text: `🔍 No messages found for query: "${query}"`
+            }]
+          };
+        }
+        
+        const messageList = results.messages.matches
+          .slice(0, limit)
+          .map(msg => {
+            const timestamp = new Date(parseInt(msg.ts) * 1000).toLocaleString();
+            const channel = msg.channel ? `#${msg.channel.name}` : 'DM';
+            const userName = msg.user || 'Unknown';
+            return `[${timestamp}] ${userName} in ${channel}: ${msg.text}`;
+          })
+          .join('\n\n');
+        
+        return {
+          content: [{
+            type: "text",
+            text: `🔍 Search results for "${query}":\n\n${messageList}`
+          }]
+        };
+      } catch (error) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Failed to search messages: ${error.message}`
+          }],
+          isError: true
+        };
+      }
+    }
+  );
+
+  // Tool 8: Get user info
+  server.registerTool(
+    "slack_get_user_info",
+    {
+      title: "Get User Information",
+      description: "Get detailed information about a specific user",
+      inputSchema: {
+        user: z.string().describe("User ID or @username to get info for")
+      }
+    },
+    async ({ user }) => {
+      try {
+        const slack = new WebClient(tokenData.access_token);
+        const userInfo = await slack.users.info({ 
+          user: user.replace('@', '') 
+        });
+        
+        const u = userInfo.user;
+        const profile = u.profile || {};
+        
+        return {
+          content: [{
+            type: "text",
+            text: `👤 User Information:
+
+**Name:** ${u.real_name || u.name}
+**Username:** @${u.name}
+**ID:** ${u.id}
+**Email:** ${profile.email || 'Not available'}
+**Phone:** ${profile.phone || 'Not available'}
+**Title:** ${profile.title || 'Not set'}
+**Status:** ${u.presence || 'unknown'}
+**Timezone:** ${u.tz_label || 'Not available'}
+**Is Admin:** ${u.is_admin ? 'Yes' : 'No'}
+**Is Owner:** ${u.is_owner ? 'Yes' : 'No'}
+**Account Type:** ${u.is_bot ? 'Bot' : 'User'}
+
+**Status Text:** ${profile.status_text || 'None'}
+**Status Emoji:** ${profile.status_emoji || 'None'}`
+          }]
+        };
+      } catch (error) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Failed to get user info: ${error.message}`
+          }],
+          isError: true
+        };
+      }
+    }
+  );
+
+  // Tool 9: Get channel info
+  server.registerTool(
+    "slack_get_channel_info",
+    {
+      title: "Get Channel Information",
+      description: "Get detailed information about a specific channel",
+      inputSchema: {
+        channel: z.string().describe("Channel ID or name to get info for")
+      }
+    },
+    async ({ channel }) => {
+      try {
+        const slack = new WebClient(tokenData.access_token);
+        const channelInfo = await slack.conversations.info({ 
+          channel: channel.replace('#', '') 
+        });
+        
+        const ch = channelInfo.channel;
+        const created = new Date(ch.created * 1000).toLocaleString();
+        
+        return {
+          content: [{
+            type: "text",
+            text: `📺 Channel Information:
+
+**Name:** #${ch.name}
+**ID:** ${ch.id}
+**Type:** ${ch.is_private ? '🔒 Private' : '🌍 Public'}
+**Topic:** ${ch.topic?.value || 'None'}
+**Purpose:** ${ch.purpose?.value || 'None'}
+**Members:** ${ch.num_members || 'Unknown'}
+**Created:** ${created}
+**Is Archived:** ${ch.is_archived ? 'Yes' : 'No'}
+**Is General:** ${ch.is_general ? 'Yes' : 'No'}
+
+**Creator:** ${ch.creator || 'Unknown'}`
+          }]
+        };
+      } catch (error) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Failed to get channel info: ${error.message}`
           }],
           isError: true
         };
