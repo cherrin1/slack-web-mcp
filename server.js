@@ -1914,4 +1914,355 @@ app.get('/oauth/callback', async (req, res) => {
         <!DOCTYPE html>
         <html>
         <head>
-          <title>Individual Authentication Successful
+          <title>Individual Authentication Successful</title>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; text-align: center; padding: 50px; background: #f5f5f5; }
+            .container { max-width: 450px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+            .success { color: #28a745; font-size: 18px; margin-bottom: 20px; }
+            .info { color: #666; margin-bottom: 20px; }
+            .button { display: inline-block; padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 5px; }
+            .spinner { border: 2px solid #f3f3f3; border-top: 2px solid #007bff; border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; margin: 20px auto; }
+            @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+            .highlight { background: #e7f3ff; padding: 10px; border-radius: 5px; margin: 10px 0; }
+            .security { background: #d4edda; border: 1px solid #c3e6cb; padding: 10px; border-radius: 5px; margin: 10px 0; }
+            .warning { background: #fff3cd; border: 1px solid #ffeaa7; padding: 10px; border-radius: 5px; margin: 10px 0; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <h1>✅ Your Personal Slack Connection!</h1>
+            <div class="success">Your individual Slack account has been connected to Claude.</div>
+            
+            <div class="security">
+              <strong>🔒 Private Connection:</strong> This connection is yours alone. Other Claude users cannot access your Slack account.
+            </div>
+
+            <div class="warning">
+              <strong>🚨 USER PROXY MODE:</strong> Claude will now act AS YOU on Slack. All messages will appear with your name and profile.
+            </div>
+            
+            <div class="highlight">
+              <strong>Your Connection Details:</strong><br>
+              <strong>Workspace:</strong> ${data.team.name}<br>
+              <strong>Your Name:</strong> ${userName}<br>
+              <strong>Claude User:</strong> ${authSession.claude_user_id.substring(0, 12)}...<br>
+              <strong>Permissions:</strong> ${data.authed_user.scope.split(',').length} scopes
+            </div>
+            <div class="spinner"></div>
+            <p>Redirecting back to Claude...</p>
+            <p><a href="${claudeCallbackUrl}" class="button">Continue to Claude</a></p>
+          </div>
+          <script>
+            // Auto-redirect after 3 seconds
+            setTimeout(() => {
+              window.location.href = "${claudeCallbackUrl}";
+            }, 3000);
+          </script>
+        </body>
+        </html>
+      `);
+    } else {
+      // Direct Slack auth - show success message
+      res.json({ 
+        success: true, 
+        message: 'Successfully authenticated with Slack',
+        user_data: {
+          team: data.team.name,
+          user: userName,
+          team_id: teamId,
+          user_id: userId,
+          scopes: data.authed_user.scope.split(',').length
+        },
+        next_step: 'You can now connect this server to Claude using the MCP endpoint'
+      });
+    }
+    
+  } catch (error) {
+    console.error('OAuth callback error:', error);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
+  }
+});
+
+// Debug endpoint to show connected users
+app.get('/debug/users', async (req, res) => {
+  const connectedUsers = Array.from(userTokens.entries())
+    .filter(([key, value]) => key.includes(':') && value.access_token)
+    .map(([key, value]) => ({
+      key: key,
+      team_name: value.team_name,
+      user_name: value.user_name,
+      scopes: value.scope ? value.scope.split(',').length : 0,
+      created_at: value.created_at
+    }));
+  
+  const activeSessions = Array.from(sessionUsers.entries()).map(([sessionId, tokenData]) => ({
+    session_id: sessionId,
+    user_name: tokenData.user_name,
+    team_name: tokenData.team_name
+  }));
+  
+  res.json({
+    success: true,
+    connected_users: connectedUsers,
+    active_mcp_sessions: activeSessions,
+    claude_tokens: claudeTokens.size,
+    total_users: connectedUsers.length
+  });
+});
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'healthy', 
+    timestamp: new Date().toISOString(),
+    connected_users: userTokens.size,
+    active_sessions: mcpTransports.size,
+    claude_tokens: claudeTokens.size
+  });
+});
+
+// Info endpoint
+app.get('/info', (req, res) => {
+  const baseUrl = getBaseUrl(req);
+  
+  res.json({
+    app_name: 'Slack MCP Server - Multi-User',
+    version: '2.0.0',
+    base_url: baseUrl,
+    status: 'online',
+    authentication: {
+      connected_users: userTokens.size,
+      active_sessions: mcpTransports.size,
+      claude_tokens: claudeTokens.size,
+      slack_teams: Array.from(userTokens.entries())
+        .filter(([key, value]) => key.includes(':') && value.team_name)
+        .map(([key, value]) => ({
+          team_name: value.team_name,
+          user_name: value.user_name,
+          team_id: value.team_id
+        }))
+    },
+    endpoints: {
+      simple_auth: `${baseUrl}/simple-auth`,
+      oauth_slack: `${baseUrl}/oauth/slack`,
+      mcp_endpoint: `${baseUrl}/mcp`,
+      debug_users: `${baseUrl}/debug/users`,
+      health_check: `${baseUrl}/health`
+    },
+    features: [
+      "🔒 Individual authentication required",
+      "🚫 No shared or fallback tokens",
+      "👤 Each user must connect their own Slack", 
+      "📊 User activity tracking",
+      "🎫 Secure token isolation",
+      "🚨 User Proxy Mode with file sharing guidelines"
+    ]
+  });
+});
+
+// Add CORS middleware for Claude integration
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, mcp-session-id');
+  res.header('Access-Control-Expose-Headers', 'mcp-session-id');
+  
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(200);
+  } else {
+    next();
+  }
+});
+
+// Enhanced MCP endpoint with smart user selection
+app.post('/mcp', async (req, res) => {
+  console.log('📡 MCP request received:', req.body?.method || 'unknown');
+  
+  try {
+    const sessionId = req.headers['mcp-session-id'] || randomUUID();
+    let transport = mcpTransports.get(sessionId);
+    
+    // Handle initialize request with smart user selection
+    if (req.body?.method === 'initialize') {
+      console.log('🚀 Initialize request - session:', sessionId);
+      
+      if (!transport) {
+        // Get user token data - NO FALLBACKS, user must authenticate themselves
+        let tokenData = null;
+        
+        const authHeader = req.headers.authorization;
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+          const token = authHeader.substring(7);
+          tokenData = getUserTokenData(token);
+          
+          if (tokenData) {
+            console.log(`🎫 Using authenticated token for ${tokenData.user_name}`);
+          } else {
+            console.log('❌ Invalid or expired token provided');
+            return res.status(401).json({
+              jsonrpc: '2.0',
+              error: {
+                code: -32000,
+                message: 'Invalid or expired authentication token. Please re-authenticate via /simple-auth.'
+              },
+              id: req.body?.id || null
+            });
+          }
+        } else if (sessionUsers.has(sessionId)) {
+          tokenData = sessionUsers.get(sessionId);
+          console.log(`🔄 Reusing session for ${tokenData.user_name}`);
+        } else {
+          // NO FALLBACK - user must authenticate
+          console.log('❌ No authentication provided - user must authenticate');
+          return res.status(401).json({
+            jsonrpc: '2.0',
+            error: {
+              code: -32000,
+              message: 'Authentication required. Please authenticate with your own Slack account via /simple-auth first.'
+            },
+            id: req.body?.id || null
+          });
+        }
+        
+        console.log(`✅ Creating session for user: ${tokenData.user_name} (${tokenData.team_name})`);
+        
+        // Create new transport for this session
+        transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => sessionId,
+          onsessioninitialized: (sid) => {
+            console.log('📡 MCP session initialized:', sid);
+          }
+        });
+        
+        transport.onclose = () => {
+          console.log('📡 MCP session closed:', sessionId);
+          mcpTransports.delete(sessionId);
+          sessionUsers.delete(sessionId);
+        };
+        
+        mcpTransports.set(sessionId, transport);
+        sessionUsers.set(sessionId, tokenData);
+        
+        // Create user-specific MCP server
+        const mcpServer = createMCPServer(tokenData, sessionId);
+        
+        // Connect server to transport
+        await mcpServer.connect(transport);
+        
+        console.log(`✅ MCP server connected for ${tokenData.user_name}`);
+        console.log(`🚨 REMINDER: Claude is now acting as ${tokenData.user_name} in all Slack communications`);
+      }
+      
+      // Handle the initialize request
+      await transport.handleRequest(req, res, req.body);
+      return;
+    }
+    
+    // For other requests, check if transport exists
+    if (!transport) {
+      console.log('❌ No transport found for session:', sessionId);
+      return res.status(400).json({
+        jsonrpc: '2.0',
+        error: {
+          code: -32000,
+          message: 'Session not found. Please initialize first.'
+        },
+        id: req.body?.id || null
+      });
+    }
+    
+    // Handle the request through the existing transport
+    await transport.handleRequest(req, res, req.body);
+    
+  } catch (error) {
+    console.error('❌ MCP endpoint error:', error);
+    res.status(500).json({
+      jsonrpc: '2.0',
+      error: {
+        code: -32603,
+        message: 'Internal server error',
+        details: error.message
+      },
+      id: req.body?.id || null
+    });
+  }
+});
+
+// Handle GET requests for server-to-client notifications via SSE
+app.get('/mcp', async (req, res) => {
+  const sessionId = req.headers['mcp-session-id'];
+  
+  if (!sessionId) {
+    return res.status(400).send('Missing session ID');
+  }
+  
+  const transport = mcpTransports.get(sessionId);
+  
+  if (!transport) {
+    return res.status(404).send('Session not found');
+  }
+  
+  try {
+    await transport.handleRequest(req, res);
+  } catch (error) {
+    console.error('❌ MCP GET error:', error);
+    res.status(500).send('Internal server error');
+  }
+});
+
+// Handle DELETE requests for session termination
+app.delete('/mcp', async (req, res) => {
+  const sessionId = req.headers['mcp-session-id'];
+  
+  if (!sessionId) {
+    return res.status(400).send('Missing session ID');
+  }
+  
+  const transport = mcpTransports.get(sessionId);
+  
+  if (!transport) {
+    return res.status(404).send('Session not found');
+  }
+  
+  try {
+    await transport.handleRequest(req, res);
+    mcpTransports.delete(sessionId);
+    sessionUsers.delete(sessionId);
+    console.log('🗑️ Session terminated:', sessionId);
+  } catch (error) {
+    console.error('❌ MCP DELETE error:', error);
+    res.status(500).send('Internal server error');
+  }
+});
+
+// Start the Express server
+app.listen(port, () => {
+  console.log(`🚀 Multi-User Slack MCP Server listening on port ${port}`);
+  console.log(`❤️ Health check: http://localhost:${port}/health`);
+  console.log(`📝 Info: http://localhost:${port}/info`);
+  console.log(`👥 Simple auth: http://localhost:${port}/simple-auth`);
+  console.log(`🔌 MCP Endpoint: http://localhost:${port}/mcp`);
+  console.log(`🚨 USER PROXY MODE: All communications appear as the authenticated user`);
+  console.log(`🚫 FILE SHARING: Enhanced validation with natural message filtering`);
+});
+
+// Handle process termination
+process.on('SIGINT', async () => {
+  console.log('Shutting down multi-user server...');
+  
+  // Close all MCP transports
+  for (const [sessionId, transport] of mcpTransports) {
+    try {
+      await transport.close();
+      console.log(`Closed MCP transport for session: ${sessionId}`);
+    } catch (error) {
+      console.error(`Error closing transport ${sessionId}:`, error);
+    }
+  }
+  
+  process.exit(0);
+});
+
+export default app;
