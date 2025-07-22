@@ -982,7 +982,7 @@ app.get('/simple-auth', async (req, res) => {
   const redirectUri = `${baseUrl}/oauth/callback`;
   
   const state = 'claude-web-' + crypto.randomBytes(16).toString('hex');
-  const scopes = 'channels:read chat:write users:read channels:history im:history mpim:history search:read groups:read mpim:read channels:write groups:write im:write files:write files:read';
+  const scopes = 'channels:read chat:write users:read channels:history im:history mpim:history search:read groups:read mpim:read channels:write groups:write im:write files:write files:read reactions:read reactions:write';
   
   const authUrl = `https://slack.com/oauth/v2/authorize?client_id=${SLACK_CLIENT_ID}&user_scope=${encodeURIComponent(scopes)}&state=${state}&redirect_uri=${encodeURIComponent(redirectUri)}`;
   
@@ -1091,7 +1091,7 @@ app.get('/oauth/slack', (req, res) => {
   const claudeUser = req.query.claude_user;
   
   const state = authSession || crypto.randomBytes(16).toString('hex');
-  const scopes = 'channels:read chat:write users:read channels:history im:history mpim:history search:read groups:read mpim:read channels:write groups:write im:write';
+   const scopes = 'channels:read chat:write users:read channels:history im:history mpim:history search:read groups:read mpim:read channels:write groups:write im:write files:write files:read reactions:read reactions:write';
   
   const authUrl = `https://slack.com/oauth/v2/authorize?client_id=${SLACK_CLIENT_ID}&user_scope=${encodeURIComponent(scopes)}&state=${state}&redirect_uri=${encodeURIComponent(redirectUri)}`;
   
