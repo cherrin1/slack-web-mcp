@@ -58,6 +58,402 @@ function createMCPServer(tokenData, sessionId) {
 
   console.log(`🔧 Creating MCP server for ${tokenData.user_name} (${tokenData.team_name}) - Session: ${sessionId}`);
 
+  // CRITICAL: System initialization resource that Claude will see upon connection
+  server.registerResource(
+    "system-initialization",
+    "slack://system/init",
+    {
+      title: "🚨 CRITICAL: User Proxy Mode Active",
+      description: "IMPORTANT: Read this first - You are acting as the authenticated user",
+      mimeType: "text/markdown"
+    },
+    async (uri) => ({
+      contents: [{
+        uri: uri.href,
+        text: `# 🚨 CRITICAL: USER PROXY MODE ACTIVE
+
+## You are now connected as: ${tokenData.user_name} (${tokenData.team_name})
+
+### MANDATORY BEHAVIOR:
+- **YOU ARE ${tokenData.user_name}** - Not Claude, not an AI assistant
+- **ALL MESSAGES appear with ${tokenData.user_name}'s name and profile**
+- **Recipients think ${tokenData.user_name} personally wrote every message**
+- **NEVER mention you are AI/Claude/assistant**
+
+### CRITICAL RULES:
+1. Only send messages the user explicitly asks you to send
+2. Write messages as if ${tokenData.user_name} typed them personally  
+3. Match natural, human workplace communication style
+4. No AI disclaimers, no "sent on behalf of", no artificial formality
+5. Ask user for clarification if message intent is unclear
+
+### FILE SHARING RULES:
+🚫 **NEVER use markdown formatting** (**, *, etc.) in file messages - Slack doesn't render it well
+🚫 **NO technical descriptions** like "This is a real, properly formatted PDF document..."
+🚫 **NO lengthy explanations** about file format or contents unless requested
+✅ **Use simple messages**: "Check this out", "Here you go", "Take a look", or just upload with filename
+
+### WRONG ❌:
+- "Hi, this is Claude sending a message for [user]..."
+- "**This is a real, properly formatted PDF document containing...**"
+- "*Actual PDF format* - Not markdown or text"
+- Any message with ** or * formatting when uploading files
+
+### RIGHT ✅:
+- Send exactly what user requests in their natural voice
+- "Hey team, quick update on the project..."
+- "Check this out" (when sharing files)
+- "Here's the document" (simple file sharing)
+
+**REMEMBER: Every single message appears as ${tokenData.user_name}'s personal communication. Act accordingly.**`
+      }]
+    })
+  );
+
+  // Resource: User Proxy Guidelines
+  server.registerResource(
+    "user-proxy-guidelines",
+    "slack://proxy/guidelines",
+    {
+      title: "User Proxy Guidelines",
+      description: "Guidelines for acting as the authenticated user's proxy in Slack communications",
+      mimeType: "text/markdown"
+    },
+    async (uri) => ({
+      contents: [{
+        uri: uri.href,
+        text: `# Slack User Proxy Guidelines
+
+## CRITICAL: You are acting as ${tokenData.user_name} (${tokenData.team_name})
+
+### Core Rules:
+1. **You ARE the user** - All messages you send appear as if ${tokenData.user_name} wrote them
+2. **Never identify as Claude or AI** - You are communicating AS ${tokenData.user_name}
+3. **Only send what the user explicitly requests** - Never add your own commentary
+4. **Match the user's tone and style** - Be natural and human-like
+5. **No AI disclaimers** - Don't mention you're an AI assistant
+
+### Message Guidelines:
+- Send messages exactly as the user would write them
+- Use the user's typical communication style
+- Don't add "sent by AI" or similar disclaimers
+- Be direct and natural in communications
+- If unsure about tone, ask the user how they want to phrase it
+
+### What NOT to do:
+❌ "Claude here, sending this on behalf of..."
+❌ "This message is sent by an AI assistant..."
+❌ Adding AI-generated formality to casual messages
+❌ Sending messages the user didn't explicitly approve
+
+### What TO do:
+✅ Send messages exactly as the user requests
+✅ Match the workplace communication style
+✅ Be natural and conversational as the user would be
+✅ Ask for clarification if the message intent is unclear
+
+**Remember: Recipients see messages as coming from ${tokenData.user_name}, so act accordingly.**`
+      }]
+    })
+  );
+
+  // Resource: User Context Information
+  server.registerResource(
+    "user-context",
+    "slack://user/context",
+    {
+      title: "Current User Context",
+      description: "Information about the authenticated user for proper representation",
+      mimeType: "text/plain"
+    },
+    async (uri) => ({
+      contents: [{
+        uri: uri.href,
+        text: `Current User Context for Slack Communications:
+
+Authenticated User: ${tokenData.user_name}
+Workspace: ${tokenData.team_name}
+User ID: ${tokenData.user_id}
+Team ID: ${tokenData.team_id}
+Connected: ${tokenData.created_at}
+Permissions: ${tokenData.scope ? tokenData.scope.split(',').length + ' scopes' : 'Standard scopes'}
+
+IMPORTANT: All communications appear as coming FROM this user.
+Act as this person would act in their workplace Slack environment.
+Do not identify as an AI or assistant - you ARE this user for communication purposes.`
+      }]
+    })
+  );
+
+  // Resource: Communication Best Practices
+  server.registerResource(
+    "communication-best-practices",
+    "slack://proxy/best-practices",
+    {
+      title: "User Proxy Communication Best Practices",
+      description: "Best practices for representing the user authentically in Slack",
+      mimeType: "text/markdown"
+    },
+    async (uri) => ({
+      contents: [{
+        uri: uri.href,
+        text: `# User Proxy Communication Best Practices
+
+## Acting as ${tokenData.user_name}
+
+### Message Authenticity:
+- Write messages as if ${tokenData.user_name} is typing them directly
+- Use natural, conversational language appropriate for workplace Slack
+- Match the communication style typical for ${tokenData.team_name}
+- Avoid overly formal or AI-like phrasing
+
+### Tone Guidelines:
+- **Professional contexts**: Clear, respectful, business-appropriate
+- **Team chats**: Friendly, collaborative, team-appropriate
+- **Direct messages**: Personal but professional, match the relationship
+- **Announcements**: Clear, informative, authoritative when needed
+
+### What Recipients See:
+Every message appears with ${tokenData.user_name}'s name and profile picture. They will assume ${tokenData.user_name} personally wrote and sent each message.
+
+### Common Mistakes to Avoid:
+- Adding "This message sent by AI" disclaimers
+- Using overly formal language in casual channels
+- Mentioning Claude or AI assistance
+- Adding unnecessary politeness that seems unnatural
+- Over-explaining or providing too much context unless requested
+
+### Success Indicators:
+✅ Messages flow naturally in conversation threads
+✅ Recipients respond as if talking directly to ${tokenData.user_name}
+✅ Communication style matches workplace norms
+✅ Messages accomplish their intended purpose clearly`
+      }]
+    })
+  );
+
+  // Resource: File Sharing Guidelines
+  server.registerResource(
+    "file-sharing-guidelines",
+    "slack://proxy/file-sharing",
+    {
+      title: "File Sharing Guidelines",
+      description: "Guidelines for sharing files naturally as the user",
+      mimeType: "text/markdown"
+    },
+    async (uri) => ({
+      contents: [{
+        uri: uri.href,
+        text: `# File Sharing Guidelines for ${tokenData.user_name}
+
+## CRITICAL: When sharing files on Slack
+
+### File Upload Behavior:
+- **Use simple, natural messages** when uploading files
+- **NO markdown formatting** (**bold**, *italic*, etc.) - Slack doesn't display it well
+- **NO detailed file summaries** unless specifically requested
+- **NO technical descriptions** of file contents
+
+### Good File Messages:
+✅ "Check this out"
+✅ "Here's the document"
+✅ "Sharing this with the team"
+✅ "Take a look at this"
+✅ "Here you go"
+✅ "FYI"
+✅ "" (no message - just upload the file)
+
+### BAD File Messages:
+❌ "**This is a real, properly formatted PDF document containing...**"
+❌ "*Actual PDF format* - Not markdown or text"
+❌ "This demonstrates how to upload actual binary files..."
+❌ Any message with ** or * formatting
+❌ Long technical explanations about file format/structure
+
+### File Upload Rules:
+1. Keep initial_comment short and conversational
+2. Use plain text only - no markdown
+3. Let the filename speak for itself
+4. Don't describe what type of file it is
+5. Don't explain file contents unless asked
+6. Be casual and natural
+
+### Example Scenarios:
+- **Uploading a PDF**: "Here's the guide" or just upload with filename
+- **Uploading an image**: "Check this out" or no comment
+- **Uploading code**: "Here's the updated script" 
+- **Uploading a report**: "Latest numbers" or "Report attached"
+
+**Remember: You are ${tokenData.user_name} sharing files normally with colleagues.**`
+      }]
+    })
+  );
+
+  // Prompt: Send Message as User
+  server.registerPrompt(
+    "send-as-user",
+    {
+      title: "Send Message as User",
+      description: "Template for sending messages that appear as if the user wrote them",
+      argsSchema: {
+        message: z.string().describe("The message content to send"),
+        channel: z.string().describe("Channel or user to send to"),
+        tone: z.enum(["professional", "casual", "friendly", "urgent"]).optional().describe("Tone to match")
+      }
+    },
+    ({ message, channel, tone = "professional" }) => ({
+      messages: [{
+        role: "user",
+        content: {
+          type: "text",
+          text: `I need you to send this message to ${channel} on Slack. Send it exactly as I would write it, maintaining a ${tone} tone. Do not add any AI disclaimers or mention that you're sending it on my behalf.
+
+Message to send: "${message}"
+
+Remember: This message will appear as coming from me (${tokenData.user_name}) in ${tokenData.team_name}. Send it naturally as if I typed it myself.`
+        }
+      }]
+    })
+  );
+
+  // Prompt: User Communication Style
+  server.registerPrompt(
+    "user-communication-style",
+    {
+      title: "User Communication Style Guide",
+      description: "Guidance on how to communicate as the authenticated user",
+      argsSchema: {
+        context: z.string().describe("The communication context or situation")
+      }
+    },
+    ({ context }) => ({
+      messages: [{
+        role: "assistant",
+        content: {
+          type: "text",
+          text: `When communicating in Slack for ${context}, remember:
+
+1. You are ${tokenData.user_name} from ${tokenData.team_name}
+2. All messages appear as if you wrote them personally
+3. Match the workplace communication style appropriate for this context
+4. Never identify as Claude, AI, or an assistant
+5. Be natural and authentic in your communication
+6. Only send what the user explicitly requests
+
+Your communications should feel authentic and human, as if ${tokenData.user_name} is personally typing each message.`
+        }
+      }]
+    })
+  );
+
+  // Prompt: Message Review Template
+  server.registerPrompt(
+    "review-message",
+    {
+      title: "Review Message Before Sending",
+      description: "Template to review messages before sending to ensure they sound like the user",
+      argsSchema: {
+        draft_message: z.string().describe("The draft message to review"),
+        recipient: z.string().describe("Who the message is going to")
+      }
+    },
+    ({ draft_message, recipient }) => ({
+      messages: [{
+        role: "user",
+        content: {
+          type: "text",
+          text: `Please review this draft message before I send it to ${recipient} on Slack:
+
+"${draft_message}"
+
+Check if it:
+1. Sounds natural and human (not AI-generated)
+2. Matches an appropriate workplace tone
+3. Contains only what I explicitly want to communicate
+4. Has no AI disclaimers or mentions
+5. Would be appropriate coming from ${tokenData.user_name}
+
+If it looks good, send it as-is. If it needs adjustment, suggest how to make it sound more natural and user-authentic.`
+        }
+      }]
+    })
+  );
+
+  // Prompt: Channel-Appropriate Communication
+  server.registerPrompt(
+    "channel-appropriate-message",
+    {
+      title: "Channel-Appropriate Message",
+      description: "Craft messages appropriate for specific Slack channels or contexts",
+      argsSchema: {
+        message_intent: z.string().describe("What you want to communicate"),
+        channel_type: z.enum(["public", "private", "dm", "announcement", "team"]).describe("Type of channel/conversation"),
+        urgency: z.enum(["low", "medium", "high"]).optional().describe("Message urgency level")
+      }
+    },
+    ({ message_intent, channel_type, urgency = "medium" }) => ({
+      messages: [{
+        role: "user",
+        content: {
+          type: "text",
+          text: `Help me craft a message for a ${channel_type} channel on Slack. The message should:
+
+Intent: ${message_intent}
+Urgency: ${urgency}
+Context: ${channel_type} conversation in ${tokenData.team_name}
+
+Requirements:
+- Sound natural coming from ${tokenData.user_name}
+- Match the appropriate tone for a ${channel_type} channel
+- Be clear and direct without unnecessary fluff
+- Feel authentic and human-written
+- No AI disclaimers or mentions
+
+Please draft this message as if I (${tokenData.user_name}) am writing it personally.`
+        }
+      }]
+    })
+  );
+
+  // Prompt: Natural File Sharing
+  server.registerPrompt(
+    "natural-file-sharing",
+    {
+      title: "Natural File Sharing Message",
+      description: "Generate natural, brief messages when sharing files - no markdown or technical descriptions",
+      argsSchema: {
+        file_type: z.enum(["document", "image", "code", "report", "other"]).describe("Type of file being shared"),
+        context: z.string().describe("Context or purpose of sharing the file")
+      }
+    },
+    ({ file_type, context }) => ({
+      messages: [{
+        role: "assistant",
+        content: {
+          type: "text",
+          text: `When sharing a ${file_type} file in the context of "${context}", use a simple, natural message as ${tokenData.user_name}:
+
+Good options:
+- "Check this out"
+- "Here you go" 
+- "Take a look"
+- "Sharing this with the team"
+- "Here's the ${file_type}"
+- "FYI"
+- "" (no message - just the filename)
+
+AVOID:
+- Markdown formatting (**, *, etc.)
+- Technical descriptions of file format
+- Long explanations unless requested
+- Formal language like "This demonstrates..." or "Please find attached..."
+
+Keep it conversational and brief - let the filename speak for itself.`
+        }
+      }]
+    })
+  );
+
   // Tool 1: Send message to channel
   server.registerTool(
     "slack_send_message",
@@ -501,480 +897,739 @@ function createMCPServer(tokenData, sessionId) {
       }
     }
   );
-// Add this new tool after the existing tools in the createMCPServer function
 
-server.registerTool(
-  "slack_upload_file",
-  {
-    title: "Upload File to Slack",
-    description: "Upload a file or image to a Slack channel or DM",
-    inputSchema: {
-      channel: z.string().describe("Channel ID or name (e.g., #general, @username, or channel ID)"),
-      file_data: z.string().describe("Base64 encoded file data"),
-      filename: z.string().describe("Name of the file including extension"),
-      title: z.string().optional().describe("Title for the file"),
-      initial_comment: z.string().optional().describe("Initial comment to post with the file"),
-      filetype: z.string().optional().describe("File type (e.g., 'png', 'jpg', 'pdf', 'txt')")
-    }
-  },
-  async ({ channel, file_data, filename, title, initial_comment, filetype }) => {
-    try {
-      const slack = new WebClient(tokenData.access_token);
-      
-      // Convert base64 to buffer
-      const fileBuffer = Buffer.from(file_data, 'base64');
-      
-      // Clean channel ID (remove # or @ prefixes)
-      const channelId = channel.replace(/^[#@]/, '');
-      
-      console.log(`Attempting uploadV2: ${filename} to ${channelId}, size: ${fileBuffer.length} bytes`);
-      
-      // Use the uploadV2 method that wraps the new API
-      const result = await slack.filesUploadV2({
-        channel_id: channelId,
-        file: fileBuffer,
-        filename: filename,
-        title: title || filename,
-        initial_comment: initial_comment,
-        file_type: filetype
-      });
-      
-      console.log(`📎 File uploaded by ${tokenData.user_name} to ${channel}: ${filename}`);
-      console.log('Upload result:', result.ok ? 'Success' : result.error);
-      
-      if (!result.ok) {
-        throw new Error(result.error || 'Upload failed');
+  // Tool 10: Enhanced Upload file with better format support and error handling
+  server.registerTool(
+    "slack_upload_file",
+    {
+      title: "Upload File to Slack (Enhanced)",
+      description: "Upload any file type to Slack with improved validation and error handling. Use simple, natural messages - no markdown formatting.",
+      inputSchema: {
+        channel: z.string().describe("Channel ID or name (e.g., #general, @username, or channel ID)"),
+        file_data: z.string().describe("Base64 encoded file data"),
+        filename: z.string().describe("Name of the file including extension"),
+        title: z.string().optional().describe("Title for the file"),
+        initial_comment: z.string().optional().describe("Simple message to accompany the file (avoid markdown, keep it natural and brief)"),
+        filetype: z.string().optional().describe("File type (e.g., 'png', 'jpg', 'pdf', 'txt', 'docx', 'xlsx')")
       }
-      
-      // The uploadV2 response structure might be different
-      const fileInfo = result.file || result.files?.[0] || {};
-      
-      return {
-        content: [{
-          type: "text",
-          text: `✅ File uploaded successfully to ${channel}!\n\nFile: ${filename}\nTitle: ${fileInfo.title || title || filename}\nType: ${fileInfo.filetype || filetype || 'unknown'}\nSize: ${fileInfo.size || fileBuffer.length} bytes\nFile ID: ${fileInfo.id || 'unknown'}\nUploaded by: ${tokenData.user_name}\n\n🔗 View: ${fileInfo.permalink || 'Available in Slack'}`
-        }]
-      };
-      
-    } catch (error) {
-      console.error(`❌ File upload failed for ${tokenData.user_name}:`, error);
-      
-      // Enhanced error reporting
-      let errorDetails = error.message;
-      if (error.data && error.data.error) {
-        errorDetails = error.data.error;
-      }
-      
-      return {
-        content: [{
-          type: "text",
-          text: `❌ Failed to upload file: ${errorDetails}\n\nDebugging info:\n- Channel: ${channel}\n- Filename: ${filename}\n- File size: ${Buffer.from(file_data, 'base64').length} bytes\n- User: ${tokenData.user_name}\n- Method: uploadV2\n\nTip: Make sure the channel exists and you have permission to post files there.`
-        }],
-        isError: true
-      };
-    }
-  }
-);
-
-// Tool: Upload text content using uploadV2
-server.registerTool(
-  "slack_upload_artifact",
-  {
-    title: "Upload Artifact Content to Slack",
-    description: "Upload text content (like code, reports, etc.) as a file to Slack",
-    inputSchema: {
-      channel: z.string().describe("Channel ID or name (e.g., #general, @username, or channel ID)"),
-      content: z.string().describe("The text content to upload as a file"),
-      filename: z.string().describe("Name of the file including extension (e.g., 'script.js', 'report.md')"),
-      title: z.string().optional().describe("Title for the file"),
-      initial_comment: z.string().optional().describe("Initial comment to post with the file")
-    }
-  },
-  async ({ channel, content, filename, title, initial_comment }) => {
-    try {
-      const slack = new WebClient(tokenData.access_token);
-      
-      // Convert text content to buffer
-      const contentBuffer = Buffer.from(content, 'utf8');
-      
-      // Clean channel ID
-      const channelId = channel.replace(/^[#@]/, '');
-      
-      // Determine file type from extension
-      const extension = filename.split('.').pop()?.toLowerCase();
-      const filetype = extension || 'txt';
-      
-      console.log(`Attempting artifact uploadV2: ${filename} to ${channelId}, length: ${content.length} chars`);
-      
-      // Use uploadV2 with text content
-      const result = await slack.filesUploadV2({
-        channel_id: channelId,
-        file: contentBuffer,
-        filename: filename,
-        title: title || filename,
-        initial_comment: initial_comment,
-        file_type: filetype
-      });
-      
-      console.log(`📄 Artifact uploaded by ${tokenData.user_name} to ${channel}: ${filename}`);
-      console.log('Upload result:', result.ok ? 'Success' : result.error);
-      
-      if (!result.ok) {
-        throw new Error(result.error || 'Upload failed');
-      }
-      
-      const fileInfo = result.file || result.files?.[0] || {};
-      
-      return {
-        content: [{
-          type: "text",
-          text: `✅ Artifact uploaded successfully to ${channel}!\n\nFile: ${filename}\nTitle: ${fileInfo.title || title || filename}\nType: ${fileInfo.filetype || filetype}\nSize: ${content.length} characters (${fileInfo.size || contentBuffer.length} bytes)\nFile ID: ${fileInfo.id || 'unknown'}\nUploaded by: ${tokenData.user_name}\n\n🔗 View: ${fileInfo.permalink || 'Available in Slack'}`
-        }]
-      };
-      
-    } catch (error) {
-      console.error(`❌ Artifact upload failed for ${tokenData.user_name}:`, error);
-      
-      let errorDetails = error.message;
-      if (error.data && error.data.error) {
-        errorDetails = error.data.error;
-      }
-      
-      return {
-        content: [{
-          type: "text",
-          text: `❌ Failed to upload artifact: ${errorDetails}\n\nDebugging info:\n- Channel: ${channel}\n- Filename: ${filename}\n- Content length: ${content.length} characters\n- User: ${tokenData.user_name}\n- Method: uploadV2\n\nTip: Check channel permissions and file size limits.`
-        }],
-        isError: true
-      };
-    }
-  }
-);
-
-// Tool: Upload image using uploadV2 
-server.registerTool(
-  "slack_upload_image",
-  {
-    title: "Upload Image to Slack",
-    description: "Upload an image to a Slack channel or DM with preview",
-    inputSchema: {
-      channel: z.string().describe("Channel ID or name (e.g., #general, @username, or channel ID)"),
-      image_data: z.string().describe("Base64 encoded image data"),
-      filename: z.string().describe("Name of the image file including extension"),
-      alt_text: z.string().optional().describe("Alt text for the image"),
-      title: z.string().optional().describe("Title for the image"),
-      initial_comment: z.string().optional().describe("Initial comment to post with the image")
-    }
-  },
-  async ({ channel, image_data, filename, alt_text, title, initial_comment }) => {
-    try {
-      const slack = new WebClient(tokenData.access_token);
-      
-      // Convert base64 to buffer
-      const imageBuffer = Buffer.from(image_data, 'base64');
-      const channelId = channel.replace(/^[#@]/, '');
-      
-      // Determine image type from filename
-      const extension = filename.toLowerCase().split('.').pop();
-      const imageType = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'].includes(extension) ? extension : 'png';
-      
-      console.log(`Attempting image uploadV2: ${filename} to ${channelId}, size: ${imageBuffer.length} bytes`);
-      
-      // Combine alt_text with initial_comment if provided
-      const comment = initial_comment ? 
-        (alt_text ? `${initial_comment}\n\nImage: ${alt_text}` : initial_comment) : 
-        (alt_text ? `Image: ${alt_text}` : undefined);
-      
-      const result = await slack.filesUploadV2({
-        channel_id: channelId,
-        file: imageBuffer,
-        filename: filename,
-        title: title || filename,
-        initial_comment: comment,
-        file_type: imageType
-      });
-      
-      console.log(`🖼️ Image uploaded by ${tokenData.user_name} to ${channel}: ${filename}`);
-      
-      if (!result.ok) {
-        throw new Error(result.error || 'Upload failed');
-      }
-      
-      const fileInfo = result.file || result.files?.[0] || {};
-      
-      return {
-        content: [{
-          type: "text",
-          text: `✅ Image uploaded successfully to ${channel}!\n\nImage: ${filename}\nTitle: ${fileInfo.title || title || filename}\nAlt text: ${alt_text || 'None'}\nType: ${fileInfo.filetype || imageType}\nSize: ${fileInfo.size || imageBuffer.length} bytes\nDimensions: ${fileInfo.original_w || '?'}x${fileInfo.original_h || '?'}\nFile ID: ${fileInfo.id || 'unknown'}\nUploaded by: ${tokenData.user_name}\n\n🔗 View: ${fileInfo.permalink || 'Available in Slack'}`
-        }]
-      };
-      
-    } catch (error) {
-      console.error(`❌ Image upload failed for ${tokenData.user_name}:`, error);
-      
-      let errorDetails = error.message;
-      if (error.data && error.data.error) {
-        errorDetails = error.data.error;
-      }
-      
-      return {
-        content: [{
-          type: "text",
-          text: `❌ Failed to upload image: ${errorDetails}\n\nDebugging info:\n- Channel: ${channel}\n- Filename: ${filename}\n- File size: ${Buffer.from(image_data, 'base64').length} bytes\n- User: ${tokenData.user_name}\n- Method: uploadV2`
-        }],
-        isError: true
-      };
-    }
-  }
-);
-// Tool: Add reaction to message
-server.registerTool(
-  "slack_add_reaction",
-  {
-    title: "Add Reaction to Message",
-    description: "Add an emoji reaction to a Slack message",
-    inputSchema: {
-      channel: z.string().describe("Channel ID or name where the message is located"),
-      timestamp: z.string().describe("Message timestamp (from message history or search results)"),
-      name: z.string().describe("Emoji name without colons (e.g., 'thumbsup', 'heart', 'fire', 'tada')")
-    }
-  },
-  async ({ channel, timestamp, name }) => {
-    try {
-      const slack = new WebClient(tokenData.access_token);
-      
-      // Add reaction to the message
-      await slack.reactions.add({
-        channel: channel.replace('#', ''),
-        timestamp: timestamp,
-        name: name.replace(/:/g, '') // Remove colons if user included them
-      });
-      
-      console.log(`👍 Reaction :${name}: added by ${tokenData.user_name} to message ${timestamp} in ${channel}`);
-      
-      return {
-        content: [{
-          type: "text",
-          text: `✅ Added :${name}: reaction to message!\n\nChannel: ${channel}\nMessage timestamp: ${timestamp}\nReaction: :${name}:\nAdded by: ${tokenData.user_name}`
-        }]
-      };
-    } catch (error) {
-      console.error(`❌ Add reaction failed for ${tokenData.user_name}:`, error.message);
-      return {
-        content: [{
-          type: "text",
-          text: `❌ Failed to add reaction: ${error.message}\n\nTip: Make sure the message timestamp is correct and you have permission to react in this channel.`
-        }],
-        isError: true
-      };
-    }
-  }
-);
-
-// Tool: Remove reaction from message
-server.registerTool(
-  "slack_remove_reaction",
-  {
-    title: "Remove Reaction from Message", 
-    description: "Remove an emoji reaction from a Slack message",
-    inputSchema: {
-      channel: z.string().describe("Channel ID or name where the message is located"),
-      timestamp: z.string().describe("Message timestamp"),
-      name: z.string().describe("Emoji name without colons (e.g., 'thumbsup', 'heart', 'fire')")
-    }
-  },
-  async ({ channel, timestamp, name }) => {
-    try {
-      const slack = new WebClient(tokenData.access_token);
-      
-      // Remove reaction from the message
-      await slack.reactions.remove({
-        channel: channel.replace('#', ''),
-        timestamp: timestamp,
-        name: name.replace(/:/g, '')
-      });
-      
-      console.log(`👎 Reaction :${name}: removed by ${tokenData.user_name} from message ${timestamp} in ${channel}`);
-      
-      return {
-        content: [{
-          type: "text",
-          text: `✅ Removed :${name}: reaction from message!\n\nChannel: ${channel}\nMessage timestamp: ${timestamp}\nReaction removed: :${name}:\nRemoved by: ${tokenData.user_name}`
-        }]
-      };
-    } catch (error) {
-      console.error(`❌ Remove reaction failed for ${tokenData.user_name}:`, error.message);
-      return {
-        content: [{
-          type: "text",
-          text: `❌ Failed to remove reaction: ${error.message}\n\nTip: You can only remove reactions that you added, or you need admin permissions.`
-        }],
-        isError: true
-      };
-    }
-  }
-);
-
-// Tool: Get reactions on a message
-server.registerTool(
-  "slack_get_reactions",
-  {
-    title: "Get Message Reactions",
-    description: "Get all reactions on a specific Slack message",
-    inputSchema: {
-      channel: z.string().describe("Channel ID or name where the message is located"),
-      timestamp: z.string().describe("Message timestamp")
-    }
-  },
-  async ({ channel, timestamp }) => {
-    try {
-      const slack = new WebClient(tokenData.access_token);
-      
-      // Get message with reactions
-      const result = await slack.conversations.history({
-        channel: channel.replace('#', ''),
-        latest: timestamp,
-        oldest: timestamp,
-        inclusive: true,
-        limit: 1
-      });
-      
-      if (!result.messages || result.messages.length === 0) {
-        return {
-          content: [{
-            type: "text", 
-            text: `❌ Message not found at timestamp ${timestamp} in ${channel}`
-          }],
-          isError: true
+    },
+    async ({ channel, file_data, filename, title, initial_comment, filetype }) => {
+      try {
+        const slack = new WebClient(tokenData.access_token);
+        
+        // Enhanced file validation and processing
+        const fileProcessor = {
+          // Validate base64 data
+          validateBase64: (data) => {
+            try {
+              // Check if it's valid base64
+              const decoded = Buffer.from(data, 'base64');
+              const reencoded = decoded.toString('base64');
+              return data === reencoded;
+            } catch {
+              return false;
+            }
+          },
+          
+          // Detect file type from extension and content
+          detectFileType: (filename, buffer) => {
+            const ext = filename.toLowerCase().split('.').pop();
+            const size = buffer.length;
+            
+            // File type mappings with validation
+            const typeMap = {
+              // Images
+              'jpg': 'jpg', 'jpeg': 'jpg', 'png': 'png', 'gif': 'gif', 'bmp': 'bmp', 'webp': 'webp', 'svg': 'svg',
+              // Documents
+              'pdf': 'pdf', 'doc': 'doc', 'docx': 'docx', 'txt': 'txt', 'rtf': 'rtf',
+              // Spreadsheets
+              'xls': 'xls', 'xlsx': 'xlsx', 'csv': 'csv',
+              // Presentations
+              'ppt': 'ppt', 'pptx': 'pptx',
+              // Archives
+              'zip': 'zip', '7z': '7z', 'rar': 'rar', 'tar': 'tar', 'gz': 'gz',
+              // Code/Text
+              'js': 'javascript', 'py': 'python', 'html': 'html', 'css': 'css', 'json': 'json', 'xml': 'xml', 'md': 'markdown',
+              // Audio/Video
+              'mp3': 'mp3', 'wav': 'wav', 'mp4': 'mp4', 'avi': 'avi', 'mov': 'mov'
+            };
+            
+            // Content-based detection for common formats
+            const signatures = {
+              pdf: buffer.slice(0, 4).toString() === '%PDF',
+              png: buffer.slice(0, 8).toString('hex') === '89504e470d0a1a0a',
+              jpg: buffer.slice(0, 3).toString('hex') === 'ffd8ff',
+              gif: buffer.slice(0, 6).toString() === 'GIF87a' || buffer.slice(0, 6).toString() === 'GIF89a',
+              zip: buffer.slice(0, 4).toString('hex') === '504b0304'
+            };
+            
+            return {
+              extension: ext,
+              detectedType: typeMap[ext] || 'binary',
+              size: size,
+              isValid: size > 0 && size < 1000000000, // 1GB limit
+              contentValid: Object.entries(signatures).some(([type, check]) => 
+                type === ext && check) || !signatures[ext] // Valid if signature matches or no signature check needed
+            };
+          },
+          
+          // Enhanced PDF processing
+          processPDF: (buffer) => {
+            const isValidPDF = buffer.slice(0, 4).toString() === '%PDF';
+            const hasEOF = buffer.includes(Buffer.from('%%EOF'));
+            const size = buffer.length;
+            
+            if (!isValidPDF) {
+              throw new Error('Invalid PDF: Missing PDF header');
+            }
+            
+            if (!hasEOF && size > 100) { // Small PDFs might not have EOF
+              console.warn('PDF Warning: Missing %%EOF marker, but proceeding');
+            }
+            
+            return {
+              isValid: true,
+              version: buffer.slice(0, 8).toString(),
+              size: size,
+              pages: 'unknown' // Could parse for page count if needed
+            };
+          },
+          
+          // Process different file types
+          processFile: (buffer, filename) => {
+            const fileInfo = fileProcessor.detectFileType(filename, buffer);
+            
+            if (!fileInfo.isValid) {
+              throw new Error(`Invalid file: ${filename} (size: ${fileInfo.size})`);
+            }
+            
+            // Special processing for specific types
+            if (fileInfo.extension === 'pdf') {
+              const pdfInfo = fileProcessor.processPDF(buffer);
+              return { ...fileInfo, ...pdfInfo };
+            }
+            
+            return fileInfo;
+          }
         };
-      }
-      
-      const message = result.messages[0];
-      const reactions = message.reactions || [];
-      
-      if (reactions.length === 0) {
+        
+        // Validate input
+        if (!file_data || !filename) {
+          throw new Error('Missing required file data or filename');
+        }
+        
+        if (!fileProcessor.validateBase64(file_data)) {
+          throw new Error('Invalid base64 file data');
+        }
+        
+        // Convert base64 to buffer
+        const fileBuffer = Buffer.from(file_data, 'base64');
+        
+        // Process and validate file
+        const processedFile = fileProcessor.processFile(fileBuffer, filename);
+        
+        // Clean channel ID (remove # or @ prefixes)
+        const channelId = channel.replace(/^[#@]/, '');
+        
+        console.log(`📤 Uploading ${processedFile.detectedType} file: ${filename}`);
+        console.log(`📊 File info:`, {
+          size: `${processedFile.size} bytes`,
+          type: processedFile.detectedType,
+          extension: processedFile.extension,
+          valid: processedFile.isValid
+        });
+        
+        // Use generic message if none provided or if it looks too technical/formatted
+        let finalComment = initial_comment;
+        if (!finalComment || 
+            finalComment.includes('**') || 
+            finalComment.includes('*') || 
+            finalComment.toLowerCase().includes('pdf format') ||
+            finalComment.toLowerCase().includes('demonstrates') ||
+            finalComment.toLowerCase().includes('properly formatted') ||
+            finalComment.length > 100) {
+          // Use simple, natural alternatives
+          const genericMessages = [
+            "Check this out",
+            "Here you go",
+            "Sharing this with the team",
+            "Take a look",
+            "Here's the file"
+          ];
+          finalComment = genericMessages[Math.floor(Math.random() * genericMessages.length)];
+        }
+        
+        // Determine best upload method based on file type and size
+        const uploadMethod = processedFile.size > 50000000 ? 'snippet' : 'file'; // 50MB threshold
+        
+        let result;
+        
+        if (uploadMethod === 'snippet' && ['txt', 'json', 'xml', 'csv', 'md'].includes(processedFile.extension)) {
+          // Use snippet upload for large text files
+          result = await slack.files.upload({
+            channels: channelId,
+            content: fileBuffer.toString('utf8'),
+            filename: filename,
+            title: title || filename,
+            initial_comment: finalComment,
+            filetype: processedFile.detectedType
+          });
+        } else {
+          // Use standard file upload (uploadV2)
+          result = await slack.filesUploadV2({
+            channel_id: channelId,
+            file: fileBuffer,
+            filename: filename,
+            title: title || filename,
+            initial_comment: finalComment,
+            file_type: filetype || processedFile.detectedType
+          });
+        }
+        
+        console.log(`✅ Upload successful: ${filename} (${uploadMethod} method)`);
+        
+        if (!result.ok) {
+          throw new Error(result.error || 'Upload failed');
+        }
+        
+        // Extract file info from response
+        const fileInfo = result.file || result.files?.[0] || {};
+        
         return {
           content: [{
             type: "text",
-            text: `📭 No reactions found on this message in ${channel}\n\nMessage timestamp: ${timestamp}\nChecked by: ${tokenData.user_name}`
+            text: `✅ File uploaded successfully to ${channel}!
+
+File: ${filename}
+Message: "${finalComment}"
+Type: ${fileInfo.filetype || processedFile.detectedType}
+Size: ${(fileBuffer.length / 1024 / 1024).toFixed(2)} MB
+Method: ${uploadMethod}
+Uploaded by: ${tokenData.user_name}
+
+${processedFile.contentValid ? '✅ Content validation passed' : '⚠️ Content validation warning'}`
           }]
         };
-      }
-      
-      // Format reactions with user counts
-      const reactionList = reactions.map(reaction => {
-        const users = reaction.users || [];
-        const userCount = reaction.count || users.length;
-        return `• :${reaction.name}: (${userCount} ${userCount === 1 ? 'person' : 'people'})`;
-      }).join('\n');
-      
-      return {
-        content: [{
-          type: "text",
-          text: `👍 Reactions on message in ${channel}:\n\n${reactionList}\n\nMessage timestamp: ${timestamp}\nTotal reactions: ${reactions.length}\nChecked by: ${tokenData.user_name}`
-        }]
-      };
-    } catch (error) {
-      console.error(`❌ Get reactions failed for ${tokenData.user_name}:`, error.message);
-      return {
-        content: [{
-          type: "text",
-          text: `❌ Failed to get reactions: ${error.message}`
-        }],
-        isError: true
-      };
-    }
-  }
-);
+        
+      } catch (error) {
+        console.error(`❌ File upload failed for ${tokenData.user_name}:`, error);
+        
+        // Enhanced error analysis
+        const analyzeError = (error) => {
+          const errorDetails = {
+            message: error.message,
+            type: 'unknown',
+            suggestions: []
+          };
+          
+          if (error.message.includes('invalid_arguments')) {
+            errorDetails.type = 'invalid_arguments';
+            errorDetails.suggestions = [
+              'Check channel permissions',
+              'Verify channel exists',
+              'Ensure proper file format'
+            ];
+          } else if (error.message.includes('file_too_large')) {
+            errorDetails.type = 'file_too_large';
+            errorDetails.suggestions = [
+              'Reduce file size',
+              'Use file compression',
+              'Upload to external service and share link'
+            ];
+          } else if (error.message.includes('Invalid PDF')) {
+            errorDetails.type = 'invalid_pdf';
+            errorDetails.suggestions = [
+              'Ensure PDF is properly formatted',
+              'Try regenerating the PDF',
+              'Check PDF is not corrupted'
+            ];
+          } else if (error.message.includes('Invalid base64')) {
+            errorDetails.type = 'encoding_error';
+            errorDetails.suggestions = [
+              'Verify base64 encoding is correct',
+              'Check for data corruption',
+              'Re-encode the file'
+            ];
+          }
+          
+          return errorDetails;
+        };
+        
+        const errorAnalysis = analyzeError(error);
+        const fileSize = file_data ? Buffer.from(file_data, 'base64').length : 0;
+        
+        return {
+          content: [{
+            type: "text",
+            text: `❌ File Upload Failed
 
-// Tool: React to latest message in channel
-server.registerTool(
-  "slack_react_to_latest",
-  {
-    title: "React to Latest Message",
-    description: "Add a reaction to the most recent message in a channel",
-    inputSchema: {
-      channel: z.string().describe("Channel ID or name"),
-      name: z.string().describe("Emoji name without colons (e.g., 'thumbsup', 'heart', 'fire', 'tada')"),
-      exclude_self: z.boolean().optional().describe("Skip your own messages").default(true)
+Error Type: ${errorAnalysis.type}
+Message: ${errorAnalysis.message}
+
+Debugging Information:
+- Channel: ${channel}
+- Filename: ${filename}
+- File size: ${fileSize} bytes (${(fileSize / 1024 / 1024).toFixed(2)} MB)
+- User: ${tokenData.user_name}
+
+Suggested Solutions:
+${errorAnalysis.suggestions.map(s => `• ${s}`).join('\n')}
+
+General Troubleshooting:
+• Ensure the channel exists and you have permission to post files
+• Check file size is under Slack's limits (1GB for paid plans, 10MB for free)
+• Verify file is not corrupted
+• Try uploading a smaller test file first`
+          }],
+          isError: true
+        };
+      }
     }
-  },
-  async ({ channel, name, exclude_self = true }) => {
-    try {
-      const slack = new WebClient(tokenData.access_token);
-      
-      // Get recent messages
-      const messages = await slack.conversations.history({
-        channel: channel.replace('#', ''),
-        limit: 10
-      });
-      
-      if (!messages.messages || messages.messages.length === 0) {
-        return {
-          content: [{
-            type: "text",
-            text: `❌ No messages found in ${channel}`
-          }],
-          isError: true
-        };
+  );
+
+  // Tool 11: Upload text content using uploadV2
+  server.registerTool(
+    "slack_upload_artifact",
+    {
+      title: "Upload Artifact Content to Slack",
+      description: "Upload text content (like code, reports, etc.) as a file to Slack. Use simple, natural messages.",
+      inputSchema: {
+        channel: z.string().describe("Channel ID or name (e.g., #general, @username, or channel ID)"),
+        content: z.string().describe("The text content to upload as a file"),
+        filename: z.string().describe("Name of the file including extension (e.g., 'script.js', 'report.md')"),
+        title: z.string().optional().describe("Title for the file"),
+        initial_comment: z.string().optional().describe("Simple message to accompany the file (keep it natural, avoid markdown)")
       }
-      
-      // Find the latest message (optionally excluding own messages)
-      let targetMessage = null;
-      for (const msg of messages.messages) {
-        if (exclude_self && msg.user === tokenData.user_id) {
-          continue; // Skip own messages
-        }
-        targetMessage = msg;
-        break;
-      }
-      
-      if (!targetMessage) {
-        return {
-          content: [{
-            type: "text",
-            text: `❌ No suitable message found in ${channel} (excluding your own messages)`
-          }],
-          isError: true
-        };
-      }
-      
-      // Add reaction to the message
-      await slack.reactions.add({
-        channel: channel.replace('#', ''),
-        timestamp: targetMessage.ts,
-        name: name.replace(/:/g, '')
-      });
-      
-      console.log(`👍 Reaction :${name}: added by ${tokenData.user_name} to latest message in ${channel}`);
-      
-      // Get user name for the message author
-      let authorName = targetMessage.user;
+    },
+    async ({ channel, content, filename, title, initial_comment }) => {
       try {
-        const userInfo = await slack.users.info({ user: targetMessage.user });
-        authorName = userInfo.user.real_name || userInfo.user.name;
-      } catch (e) {
-        // Keep original user ID if lookup fails
+        const slack = new WebClient(tokenData.access_token);
+        
+        // Convert text content to buffer
+        const contentBuffer = Buffer.from(content, 'utf8');
+        
+        // Clean channel ID
+        const channelId = channel.replace(/^[#@]/, '');
+        
+        // Determine file type from extension
+        const extension = filename.split('.').pop()?.toLowerCase();
+        const filetype = extension || 'txt';
+        
+        console.log(`Attempting artifact uploadV2: ${filename} to ${channelId}, length: ${content.length} chars`);
+        
+        // Use generic message if none provided or if it looks too technical/formatted
+        let finalComment = initial_comment;
+        if (!finalComment || 
+            finalComment.includes('**') || 
+            finalComment.includes('*') || 
+            finalComment.toLowerCase().includes('demonstrates') ||
+            finalComment.length > 80) {
+          // Use simple, natural alternatives
+          const genericMessages = [
+            "Here's the file",
+            "Check this out",
+            "Sharing this",
+            "Take a look",
+            "Here you go"
+          ];
+          finalComment = genericMessages[Math.floor(Math.random() * genericMessages.length)];
+        }
+        
+        // Use uploadV2 with text content
+        const result = await slack.filesUploadV2({
+          channel_id: channelId,
+          file: contentBuffer,
+          filename: filename,
+          title: title || filename,
+          initial_comment: finalComment,
+          file_type: filetype
+        });
+        
+        console.log(`📄 Artifact uploaded by ${tokenData.user_name} to ${channel}: ${filename}`);
+        console.log('Upload result:', result.ok ? 'Success' : result.error);
+        
+        if (!result.ok) {
+          throw new Error(result.error || 'Upload failed');
+        }
+        
+        const fileInfo = result.file || result.files?.[0] || {};
+        
+        return {
+          content: [{
+            type: "text",
+            text: `✅ File uploaded successfully to ${channel}!\n\nFile: ${filename}\nMessage: "${finalComment}"\nSize: ${content.length} characters\nUploaded by: ${tokenData.user_name}`
+          }]
+        };
+        
+      } catch (error) {
+        console.error(`❌ Artifact upload failed for ${tokenData.user_name}:`, error);
+        
+        let errorDetails = error.message;
+        if (error.data && error.data.error) {
+          errorDetails = error.data.error;
+        }
+        
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Failed to upload artifact: ${errorDetails}\n\nDebugging info:\n- Channel: ${channel}\n- Filename: ${filename}\n- Content length: ${content.length} characters\n- User: ${tokenData.user_name}\n- Method: uploadV2\n\nTip: Check channel permissions and file size limits.`
+          }],
+          isError: true
+        };
       }
-      
-      return {
-        content: [{
-          type: "text",
-          text: `✅ Added :${name}: reaction to latest message!\n\nChannel: ${channel}\nMessage author: ${authorName}\nMessage preview: "${(targetMessage.text || '').substring(0, 100)}${targetMessage.text && targetMessage.text.length > 100 ? '...' : ''}"\nReaction: :${name}:\nAdded by: ${tokenData.user_name}`
-        }]
-      };
-    } catch (error) {
-      console.error(`❌ React to latest failed for ${tokenData.user_name}:`, error.message);
-      return {
-        content: [{
-          type: "text",
-          text: `❌ Failed to react to latest message: ${error.message}`
-        }],
-        isError: true
-      };
     }
-  }
-);
+  );
+
+  // Tool 12: Upload image using uploadV2 
+  server.registerTool(
+    "slack_upload_image",
+    {
+      title: "Upload Image to Slack",
+      description: "Upload an image to a Slack channel or DM with preview. Use simple, natural messages.",
+      inputSchema: {
+        channel: z.string().describe("Channel ID or name (e.g., #general, @username, or channel ID)"),
+        image_data: z.string().describe("Base64 encoded image data"),
+        filename: z.string().describe("Name of the image file including extension"),
+        alt_text: z.string().optional().describe("Alt text for the image"),
+        title: z.string().optional().describe("Title for the image"),
+        initial_comment: z.string().optional().describe("Simple message to accompany the image (keep it natural, no markdown)")
+      }
+    },
+    async ({ channel, image_data, filename, alt_text, title, initial_comment }) => {
+      try {
+        const slack = new WebClient(tokenData.access_token);
+        
+        // Convert base64 to buffer
+        const imageBuffer = Buffer.from(image_data, 'base64');
+        const channelId = channel.replace(/^[#@]/, '');
+        
+        // Determine image type from filename
+        const extension = filename.toLowerCase().split('.').pop();
+        const imageType = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'].includes(extension) ? extension : 'png';
+        
+        console.log(`Attempting image uploadV2: ${filename} to ${channelId}, size: ${imageBuffer.length} bytes`);
+        
+        // Use generic message if none provided or if it looks too technical/formatted
+        let finalComment = initial_comment;
+        if (!finalComment || 
+            finalComment.includes('**') || 
+            finalComment.includes('*') || 
+            finalComment.toLowerCase().includes('demonstrates') ||
+            finalComment.length > 80) {
+          // Use simple, natural alternatives for images
+          const genericMessages = [
+            "Check this out",
+            "Take a look",
+            "Sharing this image",
+            "Here's a screenshot",
+            "See attached"
+          ];
+          finalComment = genericMessages[Math.floor(Math.random() * genericMessages.length)];
+        }
+        
+        // Combine alt_text naturally if provided
+        if (alt_text && !finalComment.toLowerCase().includes(alt_text.toLowerCase())) {
+          finalComment = `${finalComment} - ${alt_text}`;
+        }
+        
+        const result = await slack.filesUploadV2({
+          channel_id: channelId,
+          file: imageBuffer,
+          filename: filename,
+          title: title || filename,
+          initial_comment: finalComment,
+          file_type: imageType
+        });
+        
+        console.log(`🖼️ Image uploaded by ${tokenData.user_name} to ${channel}: ${filename}`);
+        
+        if (!result.ok) {
+          throw new Error(result.error || 'Upload failed');
+        }
+        
+        const fileInfo = result.file || result.files?.[0] || {};
+        
+        return {
+          content: [{
+            type: "text",
+            text: `✅ Image uploaded successfully to ${channel}!\n\nImage: ${filename}\nMessage: "${finalComment}"\nSize: ${imageBuffer.length} bytes\nUploaded by: ${tokenData.user_name}`
+          }]
+        };
+        
+      } catch (error) {
+        console.error(`❌ Image upload failed for ${tokenData.user_name}:`, error);
+        
+        let errorDetails = error.message;
+        if (error.data && error.data.error) {
+          errorDetails = error.data.error;
+        }
+        
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Failed to upload image: ${errorDetails}\n\nDebugging info:\n- Channel: ${channel}\n- Filename: ${filename}\n- File size: ${Buffer.from(image_data, 'base64').length} bytes\n- User: ${tokenData.user_name}\n- Method: uploadV2`
+          }],
+          isError: true
+        };
+      }
+    }
+  );
+
+  // Tool 13: Add reaction to message
+  server.registerTool(
+    "slack_add_reaction",
+    {
+      title: "Add Reaction to Message",
+      description: "Add an emoji reaction to a Slack message",
+      inputSchema: {
+        channel: z.string().describe("Channel ID or name where the message is located"),
+        timestamp: z.string().describe("Message timestamp (from message history or search results)"),
+        name: z.string().describe("Emoji name without colons (e.g., 'thumbsup', 'heart', 'fire', 'tada')")
+      }
+    },
+    async ({ channel, timestamp, name }) => {
+      try {
+        const slack = new WebClient(tokenData.access_token);
+        
+        // Add reaction to the message
+        await slack.reactions.add({
+          channel: channel.replace('#', ''),
+          timestamp: timestamp,
+          name: name.replace(/:/g, '') // Remove colons if user included them
+        });
+        
+        console.log(`👍 Reaction :${name}: added by ${tokenData.user_name} to message ${timestamp} in ${channel}`);
+        
+        return {
+          content: [{
+            type: "text",
+            text: `✅ Added :${name}: reaction to message!\n\nChannel: ${channel}\nMessage timestamp: ${timestamp}\nReaction: :${name}:\nAdded by: ${tokenData.user_name}`
+          }]
+        };
+      } catch (error) {
+        console.error(`❌ Add reaction failed for ${tokenData.user_name}:`, error.message);
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Failed to add reaction: ${error.message}\n\nTip: Make sure the message timestamp is correct and you have permission to react in this channel.`
+          }],
+          isError: true
+        };
+      }
+    }
+  );
+
+  // Tool 14: Remove reaction from message
+  server.registerTool(
+    "slack_remove_reaction",
+    {
+      title: "Remove Reaction from Message", 
+      description: "Remove an emoji reaction from a Slack message",
+      inputSchema: {
+        channel: z.string().describe("Channel ID or name where the message is located"),
+        timestamp: z.string().describe("Message timestamp"),
+        name: z.string().describe("Emoji name without colons (e.g., 'thumbsup', 'heart', 'fire')")
+      }
+    },
+    async ({ channel, timestamp, name }) => {
+      try {
+        const slack = new WebClient(tokenData.access_token);
+        
+        // Remove reaction from the message
+        await slack.reactions.remove({
+          channel: channel.replace('#', ''),
+          timestamp: timestamp,
+          name: name.replace(/:/g, '')
+        });
+        
+        console.log(`👎 Reaction :${name}: removed by ${tokenData.user_name} from message ${timestamp} in ${channel}`);
+        
+        return {
+          content: [{
+            type: "text",
+            text: `✅ Removed :${name}: reaction from message!\n\nChannel: ${channel}\nMessage timestamp: ${timestamp}\nReaction removed: :${name}:\nRemoved by: ${tokenData.user_name}`
+          }]
+        };
+      } catch (error) {
+        console.error(`❌ Remove reaction failed for ${tokenData.user_name}:`, error.message);
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Failed to remove reaction: ${error.message}\n\nTip: You can only remove reactions that you added, or you need admin permissions.`
+          }],
+          isError: true
+        };
+      }
+    }
+  );
+
+  // Tool 15: Get reactions on a message
+  server.registerTool(
+    "slack_get_reactions",
+    {
+      title: "Get Message Reactions",
+      description: "Get all reactions on a specific Slack message",
+      inputSchema: {
+        channel: z.string().describe("Channel ID or name where the message is located"),
+        timestamp: z.string().describe("Message timestamp")
+      }
+    },
+    async ({ channel, timestamp }) => {
+      try {
+        const slack = new WebClient(tokenData.access_token);
+        
+        // Get message with reactions
+        const result = await slack.conversations.history({
+          channel: channel.replace('#', ''),
+          latest: timestamp,
+          oldest: timestamp,
+          inclusive: true,
+          limit: 1
+        });
+        
+        if (!result.messages || result.messages.length === 0) {
+          return {
+            content: [{
+              type: "text", 
+              text: `❌ Message not found at timestamp ${timestamp} in ${channel}`
+            }],
+            isError: true
+          };
+        }
+        
+        const message = result.messages[0];
+        const reactions = message.reactions || [];
+        
+        if (reactions.length === 0) {
+          return {
+            content: [{
+              type: "text",
+              text: `📭 No reactions found on this message in ${channel}\n\nMessage timestamp: ${timestamp}\nChecked by: ${tokenData.user_name}`
+            }]
+          };
+        }
+        
+        // Format reactions with user counts
+        const reactionList = reactions.map(reaction => {
+          const users = reaction.users || [];
+          const userCount = reaction.count || users.length;
+          return `• :${reaction.name}: (${userCount} ${userCount === 1 ? 'person' : 'people'})`;
+        }).join('\n');
+        
+        return {
+          content: [{
+            type: "text",
+            text: `👍 Reactions on message in ${channel}:\n\n${reactionList}\n\nMessage timestamp: ${timestamp}\nTotal reactions: ${reactions.length}\nChecked by: ${tokenData.user_name}`
+          }]
+        };
+      } catch (error) {
+        console.error(`❌ Get reactions failed for ${tokenData.user_name}:`, error.message);
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Failed to get reactions: ${error.message}`
+          }],
+          isError: true
+        };
+      }
+    }
+  );
+
+  // Tool 16: React to latest message in channel
+  server.registerTool(
+    "slack_react_to_latest",
+    {
+      title: "React to Latest Message",
+      description: "Add a reaction to the most recent message in a channel",
+      inputSchema: {
+        channel: z.string().describe("Channel ID or name"),
+        name: z.string().describe("Emoji name without colons (e.g., 'thumbsup', 'heart', 'fire', 'tada')"),
+        exclude_self: z.boolean().optional().describe("Skip your own messages").default(true)
+      }
+    },
+    async ({ channel, name, exclude_self = true }) => {
+      try {
+        const slack = new WebClient(tokenData.access_token);
+        
+        // Get recent messages
+        const messages = await slack.conversations.history({
+          channel: channel.replace('#', ''),
+          limit: 10
+        });
+        
+        if (!messages.messages || messages.messages.length === 0) {
+          return {
+            content: [{
+              type: "text",
+              text: `❌ No messages found in ${channel}`
+            }],
+            isError: true
+          };
+        }
+        
+        // Find the latest message (optionally excluding own messages)
+        let targetMessage = null;
+        for (const msg of messages.messages) {
+          if (exclude_self && msg.user === tokenData.user_id) {
+            continue; // Skip own messages
+          }
+          targetMessage = msg;
+          break;
+        }
+        
+        if (!targetMessage) {
+          return {
+            content: [{
+              type: "text",
+              text: `❌ No suitable message found in ${channel} (excluding your own messages)`
+            }],
+            isError: true
+          };
+        }
+        
+        // Add reaction to the message
+        await slack.reactions.add({
+          channel: channel.replace('#', ''),
+          timestamp: targetMessage.ts,
+          name: name.replace(/:/g, '')
+        });
+        
+        console.log(`👍 Reaction :${name}: added by ${tokenData.user_name} to latest message in ${channel}`);
+        
+        // Get user name for the message author
+        let authorName = targetMessage.user;
+        try {
+          const userInfo = await slack.users.info({ user: targetMessage.user });
+          authorName = userInfo.user.real_name || userInfo.user.name;
+        } catch (e) {
+          // Keep original user ID if lookup fails
+        }
+        
+        return {
+          content: [{
+            type: "text",
+            text: `✅ Added :${name}: reaction to latest message!\n\nChannel: ${channel}\nMessage author: ${authorName}\nMessage preview: "${(targetMessage.text || '').substring(0, 100)}${targetMessage.text && targetMessage.text.length > 100 ? '...' : ''}"\nReaction: :${name}:\nAdded by: ${tokenData.user_name}`
+          }]
+        };
+      } catch (error) {
+        console.error(`❌ React to latest failed for ${tokenData.user_name}:`, error.message);
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Failed to react to latest message: ${error.message}`
+          }],
+          isError: true
+        };
+      }
+    }
+  );
+
+  // Log critical user proxy reminder
+  console.log(`🚨 USER PROXY MODE: All Slack communications will appear as ${tokenData.user_name} (${tokenData.team_name})`);
+  console.log(`📋 Available resources: system-initialization, user-proxy-guidelines, user-context, communication-best-practices, file-sharing-guidelines`);
+  console.log(`📝 Available prompts: send-as-user, user-communication-style, review-message, channel-appropriate-message, natural-file-sharing`);
+  console.log(`🚫 FILE SHARING: NO markdown formatting, NO technical descriptions, use simple natural messages`);
+
   return server;
 }
 
@@ -1054,6 +1709,7 @@ app.get('/simple-auth', async (req, res) => {
         .step { margin: 20px 0; padding: 15px; background: #f8f9fa; border-radius: 5px; text-align: left; }
         .code { background: #e9ecef; padding: 2px 6px; border-radius: 3px; font-family: monospace; }
         .info { background: #d4edda; border: 1px solid #c3e6cb; padding: 10px; border-radius: 5px; margin: 10px 0; }
+        .warning { background: #fff3cd; border: 1px solid #ffeaa7; padding: 10px; border-radius: 5px; margin: 10px 0; }
       </style>
     </head>
     <body>
@@ -1062,6 +1718,10 @@ app.get('/simple-auth', async (req, res) => {
         
         <div class="info">
           <strong>🔒 Secure Individual Access:</strong> Each person must authenticate with their own Slack account. No shared access allowed.
+        </div>
+
+        <div class="warning">
+          <strong>🚨 USER PROXY MODE:</strong> When you connect, Claude will act AS YOU on Slack. All messages will appear with your name and profile.
         </div>
         
         <div class="step">
@@ -1249,351 +1909,9 @@ app.get('/oauth/callback', async (req, res) => {
       
       console.log(`Redirecting Claude user ${authSession.claude_user_id} back with callback URL`);
       
-      // Show success page with user-specific information
+      // Show success page with user-specific information and proxy warning
       return res.send(`
         <!DOCTYPE html>
         <html>
         <head>
-          <title>Individual Authentication Successful</title>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1">
-          <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; text-align: center; padding: 50px; background: #f5f5f5; }
-            .container { max-width: 450px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-            .success { color: #28a745; font-size: 18px; margin-bottom: 20px; }
-            .info { color: #666; margin-bottom: 20px; }
-            .button { display: inline-block; padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 5px; }
-            .spinner { border: 2px solid #f3f3f3; border-top: 2px solid #007bff; border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; margin: 20px auto; }
-            @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-            .highlight { background: #e7f3ff; padding: 10px; border-radius: 5px; margin: 10px 0; }
-            .security { background: #d4edda; border: 1px solid #c3e6cb; padding: 10px; border-radius: 5px; margin: 10px 0; }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <h1>✅ Your Personal Slack Connection!</h1>
-            <div class="success">Your individual Slack account has been connected to Claude.</div>
-            
-            <div class="security">
-              <strong>🔒 Private Connection:</strong> This connection is yours alone. Other Claude users cannot access your Slack account.
-            </div>
-            
-            <div class="highlight">
-              <strong>Your Connection Details:</strong><br>
-              <strong>Workspace:</strong> ${data.team.name}<br>
-              <strong>Your Name:</strong> ${userName}<br>
-              <strong>Claude User:</strong> ${authSession.claude_user_id.substring(0, 12)}...<br>
-              <strong>Permissions:</strong> ${data.authed_user.scope.split(',').length} scopes
-            </div>
-            <div class="spinner"></div>
-            <p>Redirecting back to Claude...</p>
-            <p><a href="${claudeCallbackUrl}" class="button">Continue to Claude</a></p>
-          </div>
-          <script>
-            // Auto-redirect after 3 seconds
-            setTimeout(() => {
-              window.location.href = "${claudeCallbackUrl}";
-            }, 3000);
-          </script>
-        </body>
-        </html>
-      `);
-    } else {
-      // Direct Slack auth - show success message
-      res.json({ 
-        success: true, 
-        message: 'Successfully authenticated with Slack',
-        user_data: {
-          team: data.team.name,
-          user: userName,
-          team_id: teamId,
-          user_id: userId,
-          scopes: data.authed_user.scope.split(',').length
-        },
-        next_step: 'You can now connect this server to Claude using the MCP endpoint'
-      });
-    }
-    
-  } catch (error) {
-    console.error('OAuth callback error:', error);
-    res.status(500).json({ error: 'Internal server error', details: error.message });
-  }
-});
-
-// Debug endpoint to show connected users
-app.get('/debug/users', async (req, res) => {
-  const connectedUsers = Array.from(userTokens.entries())
-    .filter(([key, value]) => key.includes(':') && value.access_token)
-    .map(([key, value]) => ({
-      key: key,
-      team_name: value.team_name,
-      user_name: value.user_name,
-      scopes: value.scope ? value.scope.split(',').length : 0,
-      created_at: value.created_at
-    }));
-  
-  const activeSessions = Array.from(sessionUsers.entries()).map(([sessionId, tokenData]) => ({
-    session_id: sessionId,
-    user_name: tokenData.user_name,
-    team_name: tokenData.team_name
-  }));
-  
-  res.json({
-    success: true,
-    connected_users: connectedUsers,
-    active_mcp_sessions: activeSessions,
-    claude_tokens: claudeTokens.size,
-    total_users: connectedUsers.length
-  });
-});
-
-// Health check endpoint
-app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'healthy', 
-    timestamp: new Date().toISOString(),
-    connected_users: userTokens.size,
-    active_sessions: mcpTransports.size,
-    claude_tokens: claudeTokens.size
-  });
-});
-
-// Info endpoint
-app.get('/info', (req, res) => {
-  const baseUrl = getBaseUrl(req);
-  
-  res.json({
-    app_name: 'Slack MCP Server - Multi-User',
-    version: '2.0.0',
-    base_url: baseUrl,
-    status: 'online',
-    authentication: {
-      connected_users: userTokens.size,
-      active_sessions: mcpTransports.size,
-      claude_tokens: claudeTokens.size,
-      slack_teams: Array.from(userTokens.entries())
-        .filter(([key, value]) => key.includes(':') && value.team_name)
-        .map(([key, value]) => ({
-          team_name: value.team_name,
-          user_name: value.user_name,
-          team_id: value.team_id
-        }))
-    },
-    endpoints: {
-      simple_auth: `${baseUrl}/simple-auth`,
-      oauth_slack: `${baseUrl}/oauth/slack`,
-      mcp_endpoint: `${baseUrl}/mcp`,
-      debug_users: `${baseUrl}/debug/users`,
-      health_check: `${baseUrl}/health`
-    },
-    features: [
-      "🔒 Individual authentication required",
-      "🚫 No shared or fallback tokens",
-      "👤 Each user must connect their own Slack", 
-      "📊 User activity tracking",
-      "🎫 Secure token isolation"
-    ]
-  });
-});
-
-// Add CORS middleware for Claude integration
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, mcp-session-id');
-  res.header('Access-Control-Expose-Headers', 'mcp-session-id');
-  
-  if (req.method === 'OPTIONS') {
-    res.sendStatus(200);
-  } else {
-    next();
-  }
-});
-
-// Enhanced MCP endpoint with smart user selection
-app.post('/mcp', async (req, res) => {
-  console.log('📡 MCP request received:', req.body?.method || 'unknown');
-  
-  try {
-    const sessionId = req.headers['mcp-session-id'] || randomUUID();
-    let transport = mcpTransports.get(sessionId);
-    
-    // Handle initialize request with smart user selection
-    if (req.body?.method === 'initialize') {
-      console.log('🚀 Initialize request - session:', sessionId);
-      
-      if (!transport) {
-        // Get user token data - NO FALLBACKS, user must authenticate themselves
-        let tokenData = null;
-        
-        const authHeader = req.headers.authorization;
-        if (authHeader && authHeader.startsWith('Bearer ')) {
-          const token = authHeader.substring(7);
-          tokenData = getUserTokenData(token);
-          
-          if (tokenData) {
-            console.log(`🎫 Using authenticated token for ${tokenData.user_name}`);
-          } else {
-            console.log('❌ Invalid or expired token provided');
-            return res.status(401).json({
-              jsonrpc: '2.0',
-              error: {
-                code: -32000,
-                message: 'Invalid or expired authentication token. Please re-authenticate via /simple-auth.'
-              },
-              id: req.body?.id || null
-            });
-          }
-        } else if (sessionUsers.has(sessionId)) {
-          tokenData = sessionUsers.get(sessionId);
-          console.log(`🔄 Reusing session for ${tokenData.user_name}`);
-        } else {
-          // NO FALLBACK - user must authenticate
-          console.log('❌ No authentication provided - user must authenticate');
-          return res.status(401).json({
-            jsonrpc: '2.0',
-            error: {
-              code: -32000,
-              message: 'Authentication required. Please authenticate with your own Slack account via /simple-auth first.'
-            },
-            id: req.body?.id || null
-          });
-        }
-        
-        console.log(`✅ Creating session for user: ${tokenData.user_name} (${tokenData.team_name})`);
-        
-        // Create new transport for this session
-        transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: () => sessionId,
-          onsessioninitialized: (sid) => {
-            console.log('📡 MCP session initialized:', sid);
-          }
-        });
-        
-        transport.onclose = () => {
-          console.log('📡 MCP session closed:', sessionId);
-          mcpTransports.delete(sessionId);
-          sessionUsers.delete(sessionId);
-        };
-        
-        mcpTransports.set(sessionId, transport);
-        sessionUsers.set(sessionId, tokenData);
-        
-        // Create user-specific MCP server
-        const mcpServer = createMCPServer(tokenData, sessionId);
-        
-        // Connect server to transport
-        await mcpServer.connect(transport);
-        
-        console.log(`✅ MCP server connected for ${tokenData.user_name}`);
-      }
-      
-      // Handle the initialize request
-      await transport.handleRequest(req, res, req.body);
-      return;
-    }
-    
-    // For other requests, check if transport exists
-    if (!transport) {
-      console.log('❌ No transport found for session:', sessionId);
-      return res.status(400).json({
-        jsonrpc: '2.0',
-        error: {
-          code: -32000,
-          message: 'Session not found. Please initialize first.'
-        },
-        id: req.body?.id || null
-      });
-    }
-    
-    // Handle the request through the existing transport
-    await transport.handleRequest(req, res, req.body);
-    
-  } catch (error) {
-    console.error('❌ MCP endpoint error:', error);
-    res.status(500).json({
-      jsonrpc: '2.0',
-      error: {
-        code: -32603,
-        message: 'Internal server error',
-        details: error.message
-      },
-      id: req.body?.id || null
-    });
-  }
-});
-
-// Handle GET requests for server-to-client notifications via SSE
-app.get('/mcp', async (req, res) => {
-  const sessionId = req.headers['mcp-session-id'];
-  
-  if (!sessionId) {
-    return res.status(400).send('Missing session ID');
-  }
-  
-  const transport = mcpTransports.get(sessionId);
-  
-  if (!transport) {
-    return res.status(404).send('Session not found');
-  }
-  
-  try {
-    await transport.handleRequest(req, res);
-  } catch (error) {
-    console.error('❌ MCP GET error:', error);
-    res.status(500).send('Internal server error');
-  }
-});
-
-// Handle DELETE requests for session termination
-app.delete('/mcp', async (req, res) => {
-  const sessionId = req.headers['mcp-session-id'];
-  
-  if (!sessionId) {
-    return res.status(400).send('Missing session ID');
-  }
-  
-  const transport = mcpTransports.get(sessionId);
-  
-  if (!transport) {
-    return res.status(404).send('Session not found');
-  }
-  
-  try {
-    await transport.handleRequest(req, res);
-    mcpTransports.delete(sessionId);
-    sessionUsers.delete(sessionId);
-    console.log('🗑️ Session terminated:', sessionId);
-  } catch (error) {
-    console.error('❌ MCP DELETE error:', error);
-    res.status(500).send('Internal server error');
-  }
-});
-
-// Start the Express server
-app.listen(port, () => {
-  console.log(`🚀 Multi-User Slack MCP Server listening on port ${port}`);
-  console.log(`❤️ Health check: http://localhost:${port}/health`);
-  console.log(`📝 Info: http://localhost:${port}/info`);
-  console.log(`👥 Simple auth: http://localhost:${port}/simple-auth`);
-  console.log(`🔌 MCP Endpoint: http://localhost:${port}/mcp`);
-});
-
-// Handle process termination
-process.on('SIGINT', async () => {
-  console.log('Shutting down multi-user server...');
-  
-  // Close all MCP transports
-  for (const [sessionId, transport] of mcpTransports) {
-    try {
-      await transport.close();
-      console.log(`Closed MCP transport for session: ${sessionId}`);
-    } catch (error) {
-      console.error(`Error closing transport ${sessionId}:`, error);
-    }
-  }
-  
-  process.exit(0);
-});
-
-export default app;
+          <title>Individual Authentication Successful
