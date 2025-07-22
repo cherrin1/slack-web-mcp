@@ -501,7 +501,426 @@ function createMCPServer(tokenData, sessionId) {
       }
     }
   );
+// Add this new tool after the existing tools in the createMCPServer function
 
+// Tool 10: Upload file or image
+server.registerTool(
+  "slack_upload_file",
+  {
+    title: "Upload File to Slack",
+    description: "Upload a file or image to a Slack channel or DM",
+    inputSchema: {
+      channel: z.string().describe("Channel ID or name (e.g., #general, @username, or channel ID)"),
+      file_data: z.string().describe("Base64 encoded file data"),
+      filename: z.string().describe("Name of the file including extension"),
+      title: z.string().optional().describe("Title for the file"),
+      initial_comment: z.string().optional().describe("Initial comment to post with the file"),
+      filetype: z.string().optional().describe("File type (e.g., 'png', 'jpg', 'pdf', 'txt')")
+    }
+  },
+  async ({ channel, file_data, filename, title, initial_comment, filetype }) => {
+    try {
+      const slack = new WebClient(tokenData.access_token);
+      
+      // Convert base64 to buffer
+      const fileBuffer = Buffer.from(file_data, 'base64');
+      
+      // Upload the file
+      const result = await slack.files.uploadV2({
+        channel_id: channel.replace('#', '').replace('@', ''),
+        file: fileBuffer,
+        filename: filename,
+        title: title,
+        initial_comment: initial_comment,
+        filetype: filetype
+      });
+      
+      console.log(`📎 File uploaded by ${tokenData.user_name} to ${channel}: ${filename}`);
+      
+      return {
+        content: [{
+          type: "text",
+          text: `✅ File uploaded successfully to ${channel}!\n\nFile: ${filename}\nTitle: ${title || 'None'}\nType: ${filetype || 'auto-detected'}\nFile ID: ${result.file.id}\nUploaded by: ${tokenData.user_name}`
+        }]
+      };
+    } catch (error) {
+      console.error(`❌ File upload failed for ${tokenData.user_name}:`, error.message);
+      return {
+        content: [{
+          type: "text",
+          text: `❌ Failed to upload file: ${error.message}`
+        }],
+        isError: true
+      };
+    }
+  }
+);
+
+// Tool 11: Upload image with preview
+server.registerTool(
+  "slack_upload_image",
+  {
+    title: "Upload Image to Slack",
+    description: "Upload an image to a Slack channel or DM with preview",
+    inputSchema: {
+      channel: z.string().describe("Channel ID or name (e.g., #general, @username, or channel ID)"),
+      image_data: z.string().describe("Base64 encoded image data"),
+      filename: z.string().describe("Name of the image file including extension"),
+      alt_text: z.string().optional().describe("Alt text for the image"),
+      title: z.string().optional().describe("Title for the image"),
+      initial_comment: z.string().optional().describe("Initial comment to post with the image")
+    }
+  },
+  async ({ channel, image_data, filename, alt_text, title, initial_comment }) => {
+    try {
+      const slack = new WebClient(tokenData.access_token);
+      
+      // Convert base64 to buffer
+      const imageBuffer = Buffer.from(image_data, 'base64');
+      
+      // Determine image type from filename or data
+      const imageType = filename.toLowerCase().includes('.png') ? 'png' : 
+                       filename.toLowerCase().includes('.jpg') || filename.toLowerCase().includes('.jpeg') ? 'jpg' : 
+                       filename.toLowerCase().includes('.gif') ? 'gif' : 
+                       filename.toLowerCase().includes('.webp') ? 'webp' : 'png';
+      
+      // Upload the image
+      const result = await slack.files.uploadV2({
+        channel_id: channel.replace('#', '').replace('@', ''),
+        file: imageBuffer,
+        filename: filename,
+        title: title,
+        initial_comment: initial_comment,
+        filetype: imageType,
+        alt_txt: alt_text
+      });
+      
+      console.log(`🖼️ Image uploaded by ${tokenData.user_name} to ${channel}: ${filename}`);
+      
+      return {
+        content: [{
+          type: "text",
+          text: `✅ Image uploaded successfully to ${channel}!\n\nImage: ${filename}\nTitle: ${title || 'None'}\nAlt text: ${alt_text || 'None'}\nType: ${imageType}\nFile ID: ${result.file.id}\nUploaded by: ${tokenData.user_name}\n\n🔗 View: ${result.file.permalink}`
+        }]
+      };
+    } catch (error) {
+      console.error(`❌ Image upload failed for ${tokenData.user_name}:`, error.message);
+      return {
+        content: [{
+          type: "text",
+          text: `❌ Failed to upload image: ${error.message}`
+        }],
+        isError: true
+      };
+    }
+  }
+);
+
+// Tool 12: Upload artifact content as file
+server.registerTool(
+  "slack_upload_artifact",
+  {
+    title: "Upload Artifact Content to Slack",
+    description: "Upload the content of an artifact (like code, text, etc.) as a file to Slack",
+    inputSchema: {
+      channel: z.string().describe("Channel ID or name (e.g., #general, @username, or channel ID)"),
+      content: z.string().describe("The text content to upload as a file"),
+      filename: z.string().describe("Name of the file including extension (e.g., 'script.js', 'report.md')"),
+      title: z.string().optional().describe("Title for the file"),
+      initial_comment: z.string().optional().describe("Initial comment to post with the file")
+    }
+  },
+  async ({ channel, content, filename, title, initial_comment }) => {
+    try {
+      const slack = new WebClient(tokenData.access_token);
+      
+      // Convert text content to buffer
+      const fileBuffer = Buffer.from(content, 'utf8');
+      
+      // Determine file type from extension
+      const extension = filename.split('.').pop()?.toLowerCase();
+      const filetype = extension || 'txt';
+      
+      // Upload the content as a file
+      const result = await slack.files.uploadV2({
+        channel_id: channel.replace('#', '').replace('@', ''),
+        file: fileBuffer,
+        filename: filename,
+        title: title,
+        initial_comment: initial_comment,
+        filetype: filetype
+      });
+      
+      console.log(`📄 Artifact uploaded by ${tokenData.user_name} to ${channel}: ${filename}`);
+      
+      return {
+        content: [{
+          type: "text",
+          text: `✅ Artifact uploaded successfully to ${channel}!\n\nFile: ${filename}\nTitle: ${title || 'None'}\nType: ${filetype}\nSize: ${content.length} characters\nFile ID: ${result.file.id}\nUploaded by: ${tokenData.user_name}\n\n🔗 View: ${result.file.permalink}`
+        }]
+      };
+    } catch (error) {
+      console.error(`❌ Artifact upload failed for ${tokenData.user_name}:`, error.message);
+      return {
+        content: [{
+          type: "text",
+          text: `❌ Failed to upload artifact: ${error.message}`
+        }],
+        isError: true
+      };
+    }
+  }
+);
+// Add these new tools to your createMCPServer function after the existing tools
+
+// Tool: Add reaction to message
+server.registerTool(
+  "slack_add_reaction",
+  {
+    title: "Add Reaction to Message",
+    description: "Add an emoji reaction to a Slack message",
+    inputSchema: {
+      channel: z.string().describe("Channel ID or name where the message is located"),
+      timestamp: z.string().describe("Message timestamp (from message history or search results)"),
+      name: z.string().describe("Emoji name without colons (e.g., 'thumbsup', 'heart', 'fire', 'tada')")
+    }
+  },
+  async ({ channel, timestamp, name }) => {
+    try {
+      const slack = new WebClient(tokenData.access_token);
+      
+      // Add reaction to the message
+      await slack.reactions.add({
+        channel: channel.replace('#', ''),
+        timestamp: timestamp,
+        name: name.replace(/:/g, '') // Remove colons if user included them
+      });
+      
+      console.log(`👍 Reaction :${name}: added by ${tokenData.user_name} to message ${timestamp} in ${channel}`);
+      
+      return {
+        content: [{
+          type: "text",
+          text: `✅ Added :${name}: reaction to message!\n\nChannel: ${channel}\nMessage timestamp: ${timestamp}\nReaction: :${name}:\nAdded by: ${tokenData.user_name}`
+        }]
+      };
+    } catch (error) {
+      console.error(`❌ Add reaction failed for ${tokenData.user_name}:`, error.message);
+      return {
+        content: [{
+          type: "text",
+          text: `❌ Failed to add reaction: ${error.message}\n\nTip: Make sure the message timestamp is correct and you have permission to react in this channel.`
+        }],
+        isError: true
+      };
+    }
+  }
+);
+
+// Tool: Remove reaction from message
+server.registerTool(
+  "slack_remove_reaction",
+  {
+    title: "Remove Reaction from Message", 
+    description: "Remove an emoji reaction from a Slack message",
+    inputSchema: {
+      channel: z.string().describe("Channel ID or name where the message is located"),
+      timestamp: z.string().describe("Message timestamp"),
+      name: z.string().describe("Emoji name without colons (e.g., 'thumbsup', 'heart', 'fire')")
+    }
+  },
+  async ({ channel, timestamp, name }) => {
+    try {
+      const slack = new WebClient(tokenData.access_token);
+      
+      // Remove reaction from the message
+      await slack.reactions.remove({
+        channel: channel.replace('#', ''),
+        timestamp: timestamp,
+        name: name.replace(/:/g, '')
+      });
+      
+      console.log(`👎 Reaction :${name}: removed by ${tokenData.user_name} from message ${timestamp} in ${channel}`);
+      
+      return {
+        content: [{
+          type: "text",
+          text: `✅ Removed :${name}: reaction from message!\n\nChannel: ${channel}\nMessage timestamp: ${timestamp}\nReaction removed: :${name}:\nRemoved by: ${tokenData.user_name}`
+        }]
+      };
+    } catch (error) {
+      console.error(`❌ Remove reaction failed for ${tokenData.user_name}:`, error.message);
+      return {
+        content: [{
+          type: "text",
+          text: `❌ Failed to remove reaction: ${error.message}\n\nTip: You can only remove reactions that you added, or you need admin permissions.`
+        }],
+        isError: true
+      };
+    }
+  }
+);
+
+// Tool: Get reactions on a message
+server.registerTool(
+  "slack_get_reactions",
+  {
+    title: "Get Message Reactions",
+    description: "Get all reactions on a specific Slack message",
+    inputSchema: {
+      channel: z.string().describe("Channel ID or name where the message is located"),
+      timestamp: z.string().describe("Message timestamp")
+    }
+  },
+  async ({ channel, timestamp }) => {
+    try {
+      const slack = new WebClient(tokenData.access_token);
+      
+      // Get message with reactions
+      const result = await slack.conversations.history({
+        channel: channel.replace('#', ''),
+        latest: timestamp,
+        oldest: timestamp,
+        inclusive: true,
+        limit: 1
+      });
+      
+      if (!result.messages || result.messages.length === 0) {
+        return {
+          content: [{
+            type: "text", 
+            text: `❌ Message not found at timestamp ${timestamp} in ${channel}`
+          }],
+          isError: true
+        };
+      }
+      
+      const message = result.messages[0];
+      const reactions = message.reactions || [];
+      
+      if (reactions.length === 0) {
+        return {
+          content: [{
+            type: "text",
+            text: `📭 No reactions found on this message in ${channel}\n\nMessage timestamp: ${timestamp}\nChecked by: ${tokenData.user_name}`
+          }]
+        };
+      }
+      
+      // Format reactions with user counts
+      const reactionList = reactions.map(reaction => {
+        const users = reaction.users || [];
+        const userCount = reaction.count || users.length;
+        return `• :${reaction.name}: (${userCount} ${userCount === 1 ? 'person' : 'people'})`;
+      }).join('\n');
+      
+      return {
+        content: [{
+          type: "text",
+          text: `👍 Reactions on message in ${channel}:\n\n${reactionList}\n\nMessage timestamp: ${timestamp}\nTotal reactions: ${reactions.length}\nChecked by: ${tokenData.user_name}`
+        }]
+      };
+    } catch (error) {
+      console.error(`❌ Get reactions failed for ${tokenData.user_name}:`, error.message);
+      return {
+        content: [{
+          type: "text",
+          text: `❌ Failed to get reactions: ${error.message}`
+        }],
+        isError: true
+      };
+    }
+  }
+);
+
+// Tool: React to latest message in channel
+server.registerTool(
+  "slack_react_to_latest",
+  {
+    title: "React to Latest Message",
+    description: "Add a reaction to the most recent message in a channel",
+    inputSchema: {
+      channel: z.string().describe("Channel ID or name"),
+      name: z.string().describe("Emoji name without colons (e.g., 'thumbsup', 'heart', 'fire', 'tada')"),
+      exclude_self: z.boolean().optional().describe("Skip your own messages").default(true)
+    }
+  },
+  async ({ channel, name, exclude_self = true }) => {
+    try {
+      const slack = new WebClient(tokenData.access_token);
+      
+      // Get recent messages
+      const messages = await slack.conversations.history({
+        channel: channel.replace('#', ''),
+        limit: 10
+      });
+      
+      if (!messages.messages || messages.messages.length === 0) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ No messages found in ${channel}`
+          }],
+          isError: true
+        };
+      }
+      
+      // Find the latest message (optionally excluding own messages)
+      let targetMessage = null;
+      for (const msg of messages.messages) {
+        if (exclude_self && msg.user === tokenData.user_id) {
+          continue; // Skip own messages
+        }
+        targetMessage = msg;
+        break;
+      }
+      
+      if (!targetMessage) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ No suitable message found in ${channel} (excluding your own messages)`
+          }],
+          isError: true
+        };
+      }
+      
+      // Add reaction to the message
+      await slack.reactions.add({
+        channel: channel.replace('#', ''),
+        timestamp: targetMessage.ts,
+        name: name.replace(/:/g, '')
+      });
+      
+      console.log(`👍 Reaction :${name}: added by ${tokenData.user_name} to latest message in ${channel}`);
+      
+      // Get user name for the message author
+      let authorName = targetMessage.user;
+      try {
+        const userInfo = await slack.users.info({ user: targetMessage.user });
+        authorName = userInfo.user.real_name || userInfo.user.name;
+      } catch (e) {
+        // Keep original user ID if lookup fails
+      }
+      
+      return {
+        content: [{
+          type: "text",
+          text: `✅ Added :${name}: reaction to latest message!\n\nChannel: ${channel}\nMessage author: ${authorName}\nMessage preview: "${(targetMessage.text || '').substring(0, 100)}${targetMessage.text && targetMessage.text.length > 100 ? '...' : ''}"\nReaction: :${name}:\nAdded by: ${tokenData.user_name}`
+        }]
+      };
+    } catch (error) {
+      console.error(`❌ React to latest failed for ${tokenData.user_name}:`, error.message);
+      return {
+        content: [{
+          type: "text",
+          text: `❌ Failed to react to latest message: ${error.message}`
+        }],
+        isError: true
+      };
+    }
+  }
+);
   return server;
 }
 
@@ -563,7 +982,7 @@ app.get('/simple-auth', async (req, res) => {
   const redirectUri = `${baseUrl}/oauth/callback`;
   
   const state = 'claude-web-' + crypto.randomBytes(16).toString('hex');
-  const scopes = 'channels:read chat:write users:read channels:history im:history mpim:history search:read groups:read mpim:read channels:write groups:write im:write';
+  const scopes = 'channels:read chat:write users:read channels:history im:history mpim:history search:read groups:read mpim:read channels:write groups:write im:write files:write files:read';
   
   const authUrl = `https://slack.com/oauth/v2/authorize?client_id=${SLACK_CLIENT_ID}&user_scope=${encodeURIComponent(scopes)}&state=${state}&redirect_uri=${encodeURIComponent(redirectUri)}`;
   
