@@ -503,7 +503,6 @@ function createMCPServer(tokenData, sessionId) {
   );
 // Add this new tool after the existing tools in the createMCPServer function
 
-// Tool 10: Upload file or image
 server.registerTool(
   "slack_upload_file",
   {
@@ -525,30 +524,51 @@ server.registerTool(
       // Convert base64 to buffer
       const fileBuffer = Buffer.from(file_data, 'base64');
       
-      // Upload the file
-      const result = await slack.files.uploadV2({
-        channel_id: channel.replace('#', '').replace('@', ''),
+      // Clean channel ID (remove # or @ prefixes)
+      const channelId = channel.replace(/^[#@]/, '');
+      
+      console.log(`Attempting uploadV2: ${filename} to ${channelId}, size: ${fileBuffer.length} bytes`);
+      
+      // Use the uploadV2 method that wraps the new API
+      const result = await slack.filesUploadV2({
+        channel_id: channelId,
         file: fileBuffer,
         filename: filename,
-        title: title,
+        title: title || filename,
         initial_comment: initial_comment,
-        filetype: filetype
+        file_type: filetype
       });
       
       console.log(`📎 File uploaded by ${tokenData.user_name} to ${channel}: ${filename}`);
+      console.log('Upload result:', result.ok ? 'Success' : result.error);
+      
+      if (!result.ok) {
+        throw new Error(result.error || 'Upload failed');
+      }
+      
+      // The uploadV2 response structure might be different
+      const fileInfo = result.file || result.files?.[0] || {};
       
       return {
         content: [{
           type: "text",
-          text: `✅ File uploaded successfully to ${channel}!\n\nFile: ${filename}\nTitle: ${title || 'None'}\nType: ${filetype || 'auto-detected'}\nFile ID: ${result.file.id}\nUploaded by: ${tokenData.user_name}`
+          text: `✅ File uploaded successfully to ${channel}!\n\nFile: ${filename}\nTitle: ${fileInfo.title || title || filename}\nType: ${fileInfo.filetype || filetype || 'unknown'}\nSize: ${fileInfo.size || fileBuffer.length} bytes\nFile ID: ${fileInfo.id || 'unknown'}\nUploaded by: ${tokenData.user_name}\n\n🔗 View: ${fileInfo.permalink || 'Available in Slack'}`
         }]
       };
+      
     } catch (error) {
-      console.error(`❌ File upload failed for ${tokenData.user_name}:`, error.message);
+      console.error(`❌ File upload failed for ${tokenData.user_name}:`, error);
+      
+      // Enhanced error reporting
+      let errorDetails = error.message;
+      if (error.data && error.data.error) {
+        errorDetails = error.data.error;
+      }
+      
       return {
         content: [{
           type: "text",
-          text: `❌ Failed to upload file: ${error.message}`
+          text: `❌ Failed to upload file: ${errorDetails}\n\nDebugging info:\n- Channel: ${channel}\n- Filename: ${filename}\n- File size: ${Buffer.from(file_data, 'base64').length} bytes\n- User: ${tokenData.user_name}\n- Method: uploadV2\n\nTip: Make sure the channel exists and you have permission to post files there.`
         }],
         isError: true
       };
@@ -556,7 +576,82 @@ server.registerTool(
   }
 );
 
-// Tool 11: Upload image with preview
+// Tool: Upload text content using uploadV2
+server.registerTool(
+  "slack_upload_artifact",
+  {
+    title: "Upload Artifact Content to Slack",
+    description: "Upload text content (like code, reports, etc.) as a file to Slack",
+    inputSchema: {
+      channel: z.string().describe("Channel ID or name (e.g., #general, @username, or channel ID)"),
+      content: z.string().describe("The text content to upload as a file"),
+      filename: z.string().describe("Name of the file including extension (e.g., 'script.js', 'report.md')"),
+      title: z.string().optional().describe("Title for the file"),
+      initial_comment: z.string().optional().describe("Initial comment to post with the file")
+    }
+  },
+  async ({ channel, content, filename, title, initial_comment }) => {
+    try {
+      const slack = new WebClient(tokenData.access_token);
+      
+      // Convert text content to buffer
+      const contentBuffer = Buffer.from(content, 'utf8');
+      
+      // Clean channel ID
+      const channelId = channel.replace(/^[#@]/, '');
+      
+      // Determine file type from extension
+      const extension = filename.split('.').pop()?.toLowerCase();
+      const filetype = extension || 'txt';
+      
+      console.log(`Attempting artifact uploadV2: ${filename} to ${channelId}, length: ${content.length} chars`);
+      
+      // Use uploadV2 with text content
+      const result = await slack.filesUploadV2({
+        channel_id: channelId,
+        file: contentBuffer,
+        filename: filename,
+        title: title || filename,
+        initial_comment: initial_comment,
+        file_type: filetype
+      });
+      
+      console.log(`📄 Artifact uploaded by ${tokenData.user_name} to ${channel}: ${filename}`);
+      console.log('Upload result:', result.ok ? 'Success' : result.error);
+      
+      if (!result.ok) {
+        throw new Error(result.error || 'Upload failed');
+      }
+      
+      const fileInfo = result.file || result.files?.[0] || {};
+      
+      return {
+        content: [{
+          type: "text",
+          text: `✅ Artifact uploaded successfully to ${channel}!\n\nFile: ${filename}\nTitle: ${fileInfo.title || title || filename}\nType: ${fileInfo.filetype || filetype}\nSize: ${content.length} characters (${fileInfo.size || contentBuffer.length} bytes)\nFile ID: ${fileInfo.id || 'unknown'}\nUploaded by: ${tokenData.user_name}\n\n🔗 View: ${fileInfo.permalink || 'Available in Slack'}`
+        }]
+      };
+      
+    } catch (error) {
+      console.error(`❌ Artifact upload failed for ${tokenData.user_name}:`, error);
+      
+      let errorDetails = error.message;
+      if (error.data && error.data.error) {
+        errorDetails = error.data.error;
+      }
+      
+      return {
+        content: [{
+          type: "text",
+          text: `❌ Failed to upload artifact: ${errorDetails}\n\nDebugging info:\n- Channel: ${channel}\n- Filename: ${filename}\n- Content length: ${content.length} characters\n- User: ${tokenData.user_name}\n- Method: uploadV2\n\nTip: Check channel permissions and file size limits.`
+        }],
+        isError: true
+      };
+    }
+  }
+);
+
+// Tool: Upload image using uploadV2 
 server.registerTool(
   "slack_upload_image",
   {
@@ -577,102 +672,61 @@ server.registerTool(
       
       // Convert base64 to buffer
       const imageBuffer = Buffer.from(image_data, 'base64');
+      const channelId = channel.replace(/^[#@]/, '');
       
-      // Determine image type from filename or data
-      const imageType = filename.toLowerCase().includes('.png') ? 'png' : 
-                       filename.toLowerCase().includes('.jpg') || filename.toLowerCase().includes('.jpeg') ? 'jpg' : 
-                       filename.toLowerCase().includes('.gif') ? 'gif' : 
-                       filename.toLowerCase().includes('.webp') ? 'webp' : 'png';
+      // Determine image type from filename
+      const extension = filename.toLowerCase().split('.').pop();
+      const imageType = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'].includes(extension) ? extension : 'png';
       
-      // Upload the image
-      const result = await slack.files.uploadV2({
-        channel_id: channel.replace('#', '').replace('@', ''),
+      console.log(`Attempting image uploadV2: ${filename} to ${channelId}, size: ${imageBuffer.length} bytes`);
+      
+      // Combine alt_text with initial_comment if provided
+      const comment = initial_comment ? 
+        (alt_text ? `${initial_comment}\n\nImage: ${alt_text}` : initial_comment) : 
+        (alt_text ? `Image: ${alt_text}` : undefined);
+      
+      const result = await slack.filesUploadV2({
+        channel_id: channelId,
         file: imageBuffer,
         filename: filename,
-        title: title,
-        initial_comment: initial_comment,
-        filetype: imageType,
-        alt_txt: alt_text
+        title: title || filename,
+        initial_comment: comment,
+        file_type: imageType
       });
       
       console.log(`🖼️ Image uploaded by ${tokenData.user_name} to ${channel}: ${filename}`);
       
+      if (!result.ok) {
+        throw new Error(result.error || 'Upload failed');
+      }
+      
+      const fileInfo = result.file || result.files?.[0] || {};
+      
       return {
         content: [{
           type: "text",
-          text: `✅ Image uploaded successfully to ${channel}!\n\nImage: ${filename}\nTitle: ${title || 'None'}\nAlt text: ${alt_text || 'None'}\nType: ${imageType}\nFile ID: ${result.file.id}\nUploaded by: ${tokenData.user_name}\n\n🔗 View: ${result.file.permalink}`
+          text: `✅ Image uploaded successfully to ${channel}!\n\nImage: ${filename}\nTitle: ${fileInfo.title || title || filename}\nAlt text: ${alt_text || 'None'}\nType: ${fileInfo.filetype || imageType}\nSize: ${fileInfo.size || imageBuffer.length} bytes\nDimensions: ${fileInfo.original_w || '?'}x${fileInfo.original_h || '?'}\nFile ID: ${fileInfo.id || 'unknown'}\nUploaded by: ${tokenData.user_name}\n\n🔗 View: ${fileInfo.permalink || 'Available in Slack'}`
         }]
       };
+      
     } catch (error) {
-      console.error(`❌ Image upload failed for ${tokenData.user_name}:`, error.message);
+      console.error(`❌ Image upload failed for ${tokenData.user_name}:`, error);
+      
+      let errorDetails = error.message;
+      if (error.data && error.data.error) {
+        errorDetails = error.data.error;
+      }
+      
       return {
         content: [{
           type: "text",
-          text: `❌ Failed to upload image: ${error.message}`
+          text: `❌ Failed to upload image: ${errorDetails}\n\nDebugging info:\n- Channel: ${channel}\n- Filename: ${filename}\n- File size: ${Buffer.from(image_data, 'base64').length} bytes\n- User: ${tokenData.user_name}\n- Method: uploadV2`
         }],
         isError: true
       };
     }
   }
 );
-
-// Tool 12: Upload artifact content as file
-server.registerTool(
-  "slack_upload_artifact",
-  {
-    title: "Upload Artifact Content to Slack",
-    description: "Upload the content of an artifact (like code, text, etc.) as a file to Slack",
-    inputSchema: {
-      channel: z.string().describe("Channel ID or name (e.g., #general, @username, or channel ID)"),
-      content: z.string().describe("The text content to upload as a file"),
-      filename: z.string().describe("Name of the file including extension (e.g., 'script.js', 'report.md')"),
-      title: z.string().optional().describe("Title for the file"),
-      initial_comment: z.string().optional().describe("Initial comment to post with the file")
-    }
-  },
-  async ({ channel, content, filename, title, initial_comment }) => {
-    try {
-      const slack = new WebClient(tokenData.access_token);
-      
-      // Convert text content to buffer
-      const fileBuffer = Buffer.from(content, 'utf8');
-      
-      // Determine file type from extension
-      const extension = filename.split('.').pop()?.toLowerCase();
-      const filetype = extension || 'txt';
-      
-      // Upload the content as a file
-      const result = await slack.files.uploadV2({
-        channel_id: channel.replace('#', '').replace('@', ''),
-        file: fileBuffer,
-        filename: filename,
-        title: title,
-        initial_comment: initial_comment,
-        filetype: filetype
-      });
-      
-      console.log(`📄 Artifact uploaded by ${tokenData.user_name} to ${channel}: ${filename}`);
-      
-      return {
-        content: [{
-          type: "text",
-          text: `✅ Artifact uploaded successfully to ${channel}!\n\nFile: ${filename}\nTitle: ${title || 'None'}\nType: ${filetype}\nSize: ${content.length} characters\nFile ID: ${result.file.id}\nUploaded by: ${tokenData.user_name}\n\n🔗 View: ${result.file.permalink}`
-        }]
-      };
-    } catch (error) {
-      console.error(`❌ Artifact upload failed for ${tokenData.user_name}:`, error.message);
-      return {
-        content: [{
-          type: "text",
-          text: `❌ Failed to upload artifact: ${error.message}`
-        }],
-        isError: true
-      };
-    }
-  }
-);
-// Add these new tools to your createMCPServer function after the existing tools
-
 // Tool: Add reaction to message
 server.registerTool(
   "slack_add_reaction",
