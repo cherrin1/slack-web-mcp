@@ -93,17 +93,26 @@ function createMCPServer(tokenData, sessionId) {
 🚫 **NO lengthy explanations** about file format or contents unless requested
 ✅ **Use simple messages**: "Check this out", "Here you go", "Take a look", or just upload with filename
 
+### CHANNEL ID REQUIREMENTS (CRITICAL):
+🚨 **ALWAYS use Channel IDs for file uploads, NEVER channel names with #**
+- ✅ **Correct**: Use channel ID like "C1234567890" 
+- ❌ **Wrong**: Do NOT use "#general" or "#social"
+- **Always run slack_get_channels FIRST** to get the actual channel ID
+- **Example**: If user says "upload to social", first get channels, then use the ID like "C1234567890"
+
 ### WRONG ❌:
 - "Hi, this is Claude sending a message for [user]..."
 - "**This is a real, properly formatted PDF document containing...**"
 - "*Actual PDF format* - Not markdown or text"
 - Any message with ** or * formatting when uploading files
+- Using "#social" instead of channel ID in file uploads
 
 ### RIGHT ✅:
 - Send exactly what user requests in their natural voice
 - "Hey team, quick update on the project..."
 - "Check this out" (when sharing files)
 - "Here's the document" (simple file sharing)
+- Use actual channel IDs like "C1234567890" for file uploads
 
 **REMEMBER: Every single message appears as ${tokenData.user_name}'s personal communication. Act accordingly.**`
       }]
@@ -254,6 +263,13 @@ Every message appears with ${tokenData.user_name}'s name and profile picture. Th
 - **NO detailed file summaries** unless specifically requested
 - **NO technical descriptions** of file contents
 
+### CHANNEL ID REQUIREMENTS:
+🚨 **ALWAYS use Channel IDs, NEVER channel names with #**
+- ✅ **Correct**: Use channel ID like "C1234567890" 
+- ❌ **Wrong**: Do NOT use "#general" or "#social"
+- **How to get Channel ID**: Use slack_get_channels tool first to see the channel IDs
+- **Example**: If you see "• #general 🌍 Public (45 members) - C1234567890", use "C1234567890"
+
 ### Good File Messages:
 ✅ "Check this out"
 ✅ "Here's the document"
@@ -271,18 +287,19 @@ Every message appears with ${tokenData.user_name}'s name and profile picture. Th
 ❌ Long technical explanations about file format/structure
 
 ### File Upload Rules:
-1. Keep initial_comment short and conversational
-2. Use plain text only - no markdown
-3. Let the filename speak for itself
-4. Don't describe what type of file it is
-5. Don't explain file contents unless asked
-6. Be casual and natural
+1. **ALWAYS get channel ID first** using slack_get_channels
+2. Keep initial_comment short and conversational
+3. Use plain text only - no markdown
+4. Let the filename speak for itself
+5. Don't describe what type of file it is
+6. Don't explain file contents unless asked
+7. Be casual and natural
 
-### Example Scenarios:
-- **Uploading a PDF**: "Here's the guide" or just upload with filename
-- **Uploading an image**: "Check this out" or no comment
-- **Uploading code**: "Here's the updated script" 
-- **Uploading a report**: "Latest numbers" or "Report attached"
+### Example Workflow:
+1. User says: "Upload this file to the social channel"
+2. **First**: Run slack_get_channels to find the social channel ID
+3. **Then**: Use the actual channel ID (like "C1234567890") in the upload tool
+4. **Never**: Use "#social" directly in the upload tool
 
 **Remember: You are ${tokenData.user_name} sharing files normally with colleagues.**`
       }]
@@ -903,9 +920,9 @@ Keep it conversational and brief - let the filename speak for itself.`
     "slack_upload_file",
     {
       title: "Upload File to Slack (Enhanced)",
-      description: "Upload any file type to Slack with improved validation and error handling. Use simple, natural messages - no markdown formatting.",
+      description: "Upload any file type to Slack with improved validation and error handling. Use simple, natural messages - no markdown formatting. IMPORTANT: Use channel ID (not channel name with #) for the channel parameter.",
       inputSchema: {
-        channel: z.string().describe("Channel ID or name (e.g., #general, @username, or channel ID)"),
+        channel: z.string().describe("Channel ID ONLY (e.g., 'C1234567890' or user ID like 'U1234567890'). DO NOT use channel names with # (like '#general'). Use the actual channel ID from slack_get_channels."),
         file_data: z.string().describe("Base64 encoded file data"),
         filename: z.string().describe("Name of the file including extension"),
         title: z.string().optional().describe("Title for the file"),
@@ -1180,194 +1197,6 @@ General Troubleshooting:
 • Check file size is under Slack's limits (1GB for paid plans, 10MB for free)
 • Verify file is not corrupted
 • Try uploading a smaller test file first`
-          }],
-          isError: true
-        };
-      }
-    }
-  );
-
-  // Tool 11: Upload text content using uploadV2
-  server.registerTool(
-    "slack_upload_artifact",
-    {
-      title: "Upload Artifact Content to Slack",
-      description: "Upload text content (like code, reports, etc.) as a file to Slack. Use simple, natural messages.",
-      inputSchema: {
-        channel: z.string().describe("Channel ID or name (e.g., #general, @username, or channel ID)"),
-        content: z.string().describe("The text content to upload as a file"),
-        filename: z.string().describe("Name of the file including extension (e.g., 'script.js', 'report.md')"),
-        title: z.string().optional().describe("Title for the file"),
-        initial_comment: z.string().optional().describe("Simple message to accompany the file (keep it natural, avoid markdown)")
-      }
-    },
-    async ({ channel, content, filename, title, initial_comment }) => {
-      try {
-        const slack = new WebClient(tokenData.access_token);
-        
-        // Convert text content to buffer
-        const contentBuffer = Buffer.from(content, 'utf8');
-        
-        // Clean channel ID
-        const channelId = channel.replace(/^[#@]/, '');
-        
-        // Determine file type from extension
-        const extension = filename.split('.').pop()?.toLowerCase();
-        const filetype = extension || 'txt';
-        
-        console.log(`Attempting artifact uploadV2: ${filename} to ${channelId}, length: ${content.length} chars`);
-        
-        // Use generic message if none provided or if it looks too technical/formatted
-        let finalComment = initial_comment;
-        if (!finalComment || 
-            finalComment.includes('**') || 
-            finalComment.includes('*') || 
-            finalComment.toLowerCase().includes('demonstrates') ||
-            finalComment.length > 80) {
-          // Use simple, natural alternatives
-          const genericMessages = [
-            "Here's the file",
-            "Check this out",
-            "Sharing this",
-            "Take a look",
-            "Here you go"
-          ];
-          finalComment = genericMessages[Math.floor(Math.random() * genericMessages.length)];
-        }
-        
-        // Use uploadV2 with text content
-        const result = await slack.filesUploadV2({
-          channel_id: channelId,
-          file: contentBuffer,
-          filename: filename,
-          title: title || filename,
-          initial_comment: finalComment,
-          file_type: filetype
-        });
-        
-        console.log(`📄 Artifact uploaded by ${tokenData.user_name} to ${channel}: ${filename}`);
-        console.log('Upload result:', result.ok ? 'Success' : result.error);
-        
-        if (!result.ok) {
-          throw new Error(result.error || 'Upload failed');
-        }
-        
-        const fileInfo = result.file || result.files?.[0] || {};
-        
-        return {
-          content: [{
-            type: "text",
-            text: `✅ File uploaded successfully to ${channel}!\n\nFile: ${filename}\nMessage: "${finalComment}"\nSize: ${content.length} characters\nUploaded by: ${tokenData.user_name}`
-          }]
-        };
-        
-      } catch (error) {
-        console.error(`❌ Artifact upload failed for ${tokenData.user_name}:`, error);
-        
-        let errorDetails = error.message;
-        if (error.data && error.data.error) {
-          errorDetails = error.data.error;
-        }
-        
-        return {
-          content: [{
-            type: "text",
-            text: `❌ Failed to upload artifact: ${errorDetails}\n\nDebugging info:\n- Channel: ${channel}\n- Filename: ${filename}\n- Content length: ${content.length} characters\n- User: ${tokenData.user_name}\n- Method: uploadV2\n\nTip: Check channel permissions and file size limits.`
-          }],
-          isError: true
-        };
-      }
-    }
-  );
-
-  // Tool 12: Upload image using uploadV2 
-  server.registerTool(
-    "slack_upload_image",
-    {
-      title: "Upload Image to Slack",
-      description: "Upload an image to a Slack channel or DM with preview. Use simple, natural messages.",
-      inputSchema: {
-        channel: z.string().describe("Channel ID or name (e.g., #general, @username, or channel ID)"),
-        image_data: z.string().describe("Base64 encoded image data"),
-        filename: z.string().describe("Name of the image file including extension"),
-        alt_text: z.string().optional().describe("Alt text for the image"),
-        title: z.string().optional().describe("Title for the image"),
-        initial_comment: z.string().optional().describe("Simple message to accompany the image (keep it natural, no markdown)")
-      }
-    },
-    async ({ channel, image_data, filename, alt_text, title, initial_comment }) => {
-      try {
-        const slack = new WebClient(tokenData.access_token);
-        
-        // Convert base64 to buffer
-        const imageBuffer = Buffer.from(image_data, 'base64');
-        const channelId = channel.replace(/^[#@]/, '');
-        
-        // Determine image type from filename
-        const extension = filename.toLowerCase().split('.').pop();
-        const imageType = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'].includes(extension) ? extension : 'png';
-        
-        console.log(`Attempting image uploadV2: ${filename} to ${channelId}, size: ${imageBuffer.length} bytes`);
-        
-        // Use generic message if none provided or if it looks too technical/formatted
-        let finalComment = initial_comment;
-        if (!finalComment || 
-            finalComment.includes('**') || 
-            finalComment.includes('*') || 
-            finalComment.toLowerCase().includes('demonstrates') ||
-            finalComment.length > 80) {
-          // Use simple, natural alternatives for images
-          const genericMessages = [
-            "Check this out",
-            "Take a look",
-            "Sharing this image",
-            "Here's a screenshot",
-            "See attached"
-          ];
-          finalComment = genericMessages[Math.floor(Math.random() * genericMessages.length)];
-        }
-        
-        // Combine alt_text naturally if provided
-        if (alt_text && !finalComment.toLowerCase().includes(alt_text.toLowerCase())) {
-          finalComment = `${finalComment} - ${alt_text}`;
-        }
-        
-        const result = await slack.filesUploadV2({
-          channel_id: channelId,
-          file: imageBuffer,
-          filename: filename,
-          title: title || filename,
-          initial_comment: finalComment,
-          file_type: imageType
-        });
-        
-        console.log(`🖼️ Image uploaded by ${tokenData.user_name} to ${channel}: ${filename}`);
-        
-        if (!result.ok) {
-          throw new Error(result.error || 'Upload failed');
-        }
-        
-        const fileInfo = result.file || result.files?.[0] || {};
-        
-        return {
-          content: [{
-            type: "text",
-            text: `✅ Image uploaded successfully to ${channel}!\n\nImage: ${filename}\nMessage: "${finalComment}"\nSize: ${imageBuffer.length} bytes\nUploaded by: ${tokenData.user_name}`
-          }]
-        };
-        
-      } catch (error) {
-        console.error(`❌ Image upload failed for ${tokenData.user_name}:`, error);
-        
-        let errorDetails = error.message;
-        if (error.data && error.data.error) {
-          errorDetails = error.data.error;
-        }
-        
-        return {
-          content: [{
-            type: "text",
-            text: `❌ Failed to upload image: ${errorDetails}\n\nDebugging info:\n- Channel: ${channel}\n- Filename: ${filename}\n- File size: ${Buffer.from(image_data, 'base64').length} bytes\n- User: ${tokenData.user_name}\n- Method: uploadV2`
           }],
           isError: true
         };
