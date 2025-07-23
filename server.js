@@ -915,295 +915,114 @@ Keep it conversational and brief - let the filename speak for itself.`
     }
   );
 
-  // Tool 10: Enhanced Upload file with better format support and error handling
-  server.registerTool(
-    "slack_upload_file",
-    {
-      title: "Upload File to Slack (Enhanced)",
-      description: "Upload any file type to Slack with improved validation and error handling. Use simple, natural messages - no markdown formatting. IMPORTANT: Use channel ID (not channel name with #) for the channel parameter.",
-      inputSchema: {
-        channel: z.string().describe("Channel ID ONLY (e.g., 'C1234567890' or user ID like 'U1234567890'). DO NOT use channel names with # (like '#general'). Use the actual channel ID from slack_get_channels."),
-        file_data: z.string().describe("Base64 encoded file data"),
-        filename: z.string().describe("Name of the file including extension"),
-        title: z.string().optional().describe("Title for the file"),
-        initial_comment: z.string().optional().describe("Simple message to accompany the file (avoid markdown, keep it natural and brief)"),
-        filetype: z.string().optional().describe("File type (e.g., 'png', 'jpg', 'pdf', 'txt', 'docx', 'xlsx')")
+// Simplified Slack File Upload - Less likely to crash Claude
+server.registerTool(
+  "slack_upload_file",
+  {
+    title: "Upload File to Slack",
+    description: "Upload any file type to Slack with improved validation and error handling. Use simple, natural messages - no markdown formatting. IMPORTANT: Use channel ID (not channel name with #) for the channel parameter.",
+    inputSchema: {
+      channel: z.string().describe("Channel ID ONLY (e.g., 'C1234567890' or user ID like 'U1234567890'). DO NOT use channel names with # (like '#general'). Use the actual channel ID from slack_get_channels."),
+      file_data: z.string().describe("Base64 encoded file data"),
+      filename: z.string().describe("Name of the file including extension"),
+      title: z.string().optional().describe("Title for the file"),
+      initial_comment: z.string().optional().describe("Simple message to accompany the file (avoid markdown, keep it natural and brief)"),
+      filetype: z.string().optional().describe("File type (e.g., 'png', 'jpg', 'pdf', 'txt', 'docx', 'xlsx')")
+    }
+  },
+  async ({ channel, file_data, filename, title, initial_comment, filetype }) => {
+    try {
+      const slack = new WebClient(tokenData.access_token);
+      
+      // Basic validation only
+      if (!file_data || !filename) {
+        throw new Error('Missing required file data or filename');
       }
-    },
-    async ({ channel, file_data, filename, title, initial_comment, filetype }) => {
+      
+      // Simple base64 validation
+      let fileBuffer;
       try {
-        const slack = new WebClient(tokenData.access_token);
-        
-        // Enhanced file validation and processing
-        const fileProcessor = {
-          // Validate base64 data
-          validateBase64: (data) => {
-            try {
-              // Check if it's valid base64
-              const decoded = Buffer.from(data, 'base64');
-              const reencoded = decoded.toString('base64');
-              return data === reencoded;
-            } catch {
-              return false;
-            }
-          },
-          
-          // Detect file type from extension and content
-          detectFileType: (filename, buffer) => {
-            const ext = filename.toLowerCase().split('.').pop();
-            const size = buffer.length;
-            
-            // File type mappings with validation
-            const typeMap = {
-              // Images
-              'jpg': 'jpg', 'jpeg': 'jpg', 'png': 'png', 'gif': 'gif', 'bmp': 'bmp', 'webp': 'webp', 'svg': 'svg',
-              // Documents
-              'pdf': 'pdf', 'doc': 'doc', 'docx': 'docx', 'txt': 'txt', 'rtf': 'rtf',
-              // Spreadsheets
-              'xls': 'xls', 'xlsx': 'xlsx', 'csv': 'csv',
-              // Presentations
-              'ppt': 'ppt', 'pptx': 'pptx',
-              // Archives
-              'zip': 'zip', '7z': '7z', 'rar': 'rar', 'tar': 'tar', 'gz': 'gz',
-              // Code/Text
-              'js': 'javascript', 'py': 'python', 'html': 'html', 'css': 'css', 'json': 'json', 'xml': 'xml', 'md': 'markdown',
-              // Audio/Video
-              'mp3': 'mp3', 'wav': 'wav', 'mp4': 'mp4', 'avi': 'avi', 'mov': 'mov'
-            };
-            
-            // Content-based detection for common formats
-            const signatures = {
-              pdf: buffer.slice(0, 4).toString() === '%PDF',
-              png: buffer.slice(0, 8).toString('hex') === '89504e470d0a1a0a',
-              jpg: buffer.slice(0, 3).toString('hex') === 'ffd8ff',
-              gif: buffer.slice(0, 6).toString() === 'GIF87a' || buffer.slice(0, 6).toString() === 'GIF89a',
-              zip: buffer.slice(0, 4).toString('hex') === '504b0304'
-            };
-            
-            return {
-              extension: ext,
-              detectedType: typeMap[ext] || 'binary',
-              size: size,
-              isValid: size > 0 && size < 1000000000, // 1GB limit
-              contentValid: Object.entries(signatures).some(([type, check]) => 
-                type === ext && check) || !signatures[ext] // Valid if signature matches or no signature check needed
-            };
-          },
-          
-          // Enhanced PDF processing
-          processPDF: (buffer) => {
-            const isValidPDF = buffer.slice(0, 4).toString() === '%PDF';
-            const hasEOF = buffer.includes(Buffer.from('%%EOF'));
-            const size = buffer.length;
-            
-            if (!isValidPDF) {
-              throw new Error('Invalid PDF: Missing PDF header');
-            }
-            
-            if (!hasEOF && size > 100) { // Small PDFs might not have EOF
-              console.warn('PDF Warning: Missing %%EOF marker, but proceeding');
-            }
-            
-            return {
-              isValid: true,
-              version: buffer.slice(0, 8).toString(),
-              size: size,
-              pages: 'unknown' // Could parse for page count if needed
-            };
-          },
-          
-          // Process different file types
-          processFile: (buffer, filename) => {
-            const fileInfo = fileProcessor.detectFileType(filename, buffer);
-            
-            if (!fileInfo.isValid) {
-              throw new Error(`Invalid file: ${filename} (size: ${fileInfo.size})`);
-            }
-            
-            // Special processing for specific types
-            if (fileInfo.extension === 'pdf') {
-              const pdfInfo = fileProcessor.processPDF(buffer);
-              return { ...fileInfo, ...pdfInfo };
-            }
-            
-            return fileInfo;
-          }
+        fileBuffer = Buffer.from(file_data, 'base64');
+      } catch (error) {
+        throw new Error('Invalid base64 file data');
+      }
+      
+      // Basic size check (100MB limit)
+      if (fileBuffer.length > 100 * 1024 * 1024) {
+        throw new Error('File too large (100MB limit)');
+      }
+      
+      // Clean channel ID
+      const channelId = channel.replace(/^[#@]/, '');
+      
+      // Simple file type detection from extension
+      const getFileType = (filename) => {
+        const ext = filename.toLowerCase().split('.').pop();
+        const typeMap = {
+          'jpg': 'jpg', 'jpeg': 'jpg', 'png': 'png', 'gif': 'gif', 'pdf': 'pdf',
+          'doc': 'doc', 'docx': 'docx', 'txt': 'txt', 'csv': 'csv',
+          'xls': 'xls', 'xlsx': 'xlsx', 'zip': 'zip', 'json': 'json'
         };
-        
-        // Validate input
-        if (!file_data || !filename) {
-          throw new Error('Missing required file data or filename');
-        }
-        
-        if (!fileProcessor.validateBase64(file_data)) {
-          throw new Error('Invalid base64 file data');
-        }
-        
-        // Convert base64 to buffer
-        const fileBuffer = Buffer.from(file_data, 'base64');
-        
-        // Process and validate file
-        const processedFile = fileProcessor.processFile(fileBuffer, filename);
-        
-        // Clean channel ID (remove # or @ prefixes)
-        const channelId = channel.replace(/^[#@]/, '');
-        
-        console.log(`📤 Uploading ${processedFile.detectedType} file: ${filename}`);
-        console.log(`📊 File info:`, {
-          size: `${processedFile.size} bytes`,
-          type: processedFile.detectedType,
-          extension: processedFile.extension,
-          valid: processedFile.isValid
-        });
-        
-        // Use generic message if none provided or if it looks too technical/formatted
-        let finalComment = initial_comment;
-        if (!finalComment || 
-            finalComment.includes('**') || 
-            finalComment.includes('*') || 
-            finalComment.toLowerCase().includes('pdf format') ||
-            finalComment.toLowerCase().includes('demonstrates') ||
-            finalComment.toLowerCase().includes('properly formatted') ||
-            finalComment.length > 100) {
-          // Use simple, natural alternatives
-          const genericMessages = [
-            "Check this out",
-            "Here you go",
-            "Sharing this with the team",
-            "Take a look",
-            "Here's the file"
-          ];
-          finalComment = genericMessages[Math.floor(Math.random() * genericMessages.length)];
-        }
-        
-        // Determine best upload method based on file type and size
-        const uploadMethod = processedFile.size > 50000000 ? 'snippet' : 'file'; // 50MB threshold
-        
-        let result;
-        
-        if (uploadMethod === 'snippet' && ['txt', 'json', 'xml', 'csv', 'md'].includes(processedFile.extension)) {
-          // Use snippet upload for large text files
-          result = await slack.files.upload({
-            channels: channelId,
-            content: fileBuffer.toString('utf8'),
-            filename: filename,
-            title: title || filename,
-            initial_comment: finalComment,
-            filetype: processedFile.detectedType
-          });
-        } else {
-          // Use standard file upload (uploadV2)
-          result = await slack.filesUploadV2({
-            channel_id: channelId,
-            file: fileBuffer,
-            filename: filename,
-            title: title || filename,
-            initial_comment: finalComment,
-            file_type: filetype || processedFile.detectedType
-          });
-        }
-        
-        console.log(`✅ Upload successful: ${filename} (${uploadMethod} method)`);
-        
-        if (!result.ok) {
-          throw new Error(result.error || 'Upload failed');
-        }
-        
-        // Extract file info from response
-        const fileInfo = result.file || result.files?.[0] || {};
-        
-        return {
-          content: [{
-            type: "text",
-            text: `✅ File uploaded successfully to ${channel}!
+        return typeMap[ext] || 'binary';
+      };
+      
+      const detectedType = filetype || getFileType(filename);
+      
+      // Use simple comment if none provided or if it looks formatted
+      let finalComment = initial_comment;
+      if (!finalComment || finalComment.includes('**') || finalComment.includes('*')) {
+        finalComment = "Here's the file";
+      }
+      
+      console.log(`Uploading: ${filename} (${(fileBuffer.length / 1024).toFixed(1)}KB)`);
+      
+      // Use filesUploadV2 for most cases
+      const result = await slack.filesUploadV2({
+        channel_id: channelId,
+        file: fileBuffer,
+        filename: filename,
+        title: title || filename,
+        initial_comment: finalComment,
+        file_type: detectedType
+      });
+      
+      if (!result.ok) {
+        throw new Error(result.error || 'Upload failed');
+      }
+      
+      return {
+        content: [{
+          type: "text",
+          text: `✅ File uploaded successfully!
 
 File: ${filename}
-Message: "${finalComment}"
-Type: ${fileInfo.filetype || processedFile.detectedType}
 Size: ${(fileBuffer.length / 1024 / 1024).toFixed(2)} MB
-Method: ${uploadMethod}
-Uploaded by: ${tokenData.user_name}
+Type: ${detectedType}
+Channel: ${channel}
+Message: "${finalComment}"`
+        }]
+      };
+      
+    } catch (error) {
+      console.error(`File upload failed:`, error.message);
+      
+      // Simple error response
+      return {
+        content: [{
+          type: "text",
+          text: `❌ File upload failed: ${error.message}
 
-${processedFile.contentValid ? '✅ Content validation passed' : '⚠️ Content validation warning'}`
-          }]
-        };
-        
-      } catch (error) {
-        console.error(`❌ File upload failed for ${tokenData.user_name}:`, error);
-        
-        // Enhanced error analysis
-        const analyzeError = (error) => {
-          const errorDetails = {
-            message: error.message,
-            type: 'unknown',
-            suggestions: []
-          };
-          
-          if (error.message.includes('invalid_arguments')) {
-            errorDetails.type = 'invalid_arguments';
-            errorDetails.suggestions = [
-              'Check channel permissions',
-              'Verify channel exists',
-              'Ensure proper file format'
-            ];
-          } else if (error.message.includes('file_too_large')) {
-            errorDetails.type = 'file_too_large';
-            errorDetails.suggestions = [
-              'Reduce file size',
-              'Use file compression',
-              'Upload to external service and share link'
-            ];
-          } else if (error.message.includes('Invalid PDF')) {
-            errorDetails.type = 'invalid_pdf';
-            errorDetails.suggestions = [
-              'Ensure PDF is properly formatted',
-              'Try regenerating the PDF',
-              'Check PDF is not corrupted'
-            ];
-          } else if (error.message.includes('Invalid base64')) {
-            errorDetails.type = 'encoding_error';
-            errorDetails.suggestions = [
-              'Verify base64 encoding is correct',
-              'Check for data corruption',
-              'Re-encode the file'
-            ];
-          }
-          
-          return errorDetails;
-        };
-        
-        const errorAnalysis = analyzeError(error);
-        const fileSize = file_data ? Buffer.from(file_data, 'base64').length : 0;
-        
-        return {
-          content: [{
-            type: "text",
-            text: `❌ File Upload Failed
-
-Error Type: ${errorAnalysis.type}
-Message: ${errorAnalysis.message}
-
-Debugging Information:
-- Channel: ${channel}
-- Filename: ${filename}
-- File size: ${fileSize} bytes (${(fileSize / 1024 / 1024).toFixed(2)} MB)
-- User: ${tokenData.user_name}
-
-Suggested Solutions:
-${errorAnalysis.suggestions.map(s => `• ${s}`).join('\n')}
-
-General Troubleshooting:
-• Ensure the channel exists and you have permission to post files
-• Check file size is under Slack's limits (1GB for paid plans, 10MB for free)
-• Verify file is not corrupted
-• Try uploading a smaller test file first`
-          }],
-          isError: true
-        };
-      }
+Basic troubleshooting:
+• Check channel permissions
+• Verify file size is under 100MB
+• Ensure file data is properly base64 encoded
+• Try a smaller test file first`
+        }],
+        isError: true
+      };
     }
-  );
-
+  }
+);
   // Tool 13: Add reaction to message
   server.registerTool(
     "slack_add_reaction",
