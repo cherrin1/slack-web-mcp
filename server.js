@@ -5,7 +5,6 @@ import { WebClient } from "@slack/web-api";
 import crypto from "crypto";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
-import sharp from 'sharp';
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -916,77 +915,77 @@ Keep it conversational and brief - let the filename speak for itself.`
     }
   );
 
-// Simplified Slack File Upload - Less likely to crash Claude
-// Unified file upload tool with automatic server-side processing
-// Replace your entire Tool 10 with this simple version:
+// Remove these from your package.json dependencies:
+// "sharp": "^0.33.5",
+// "multer": "^1.4.5-lts.1"
+
+// Simple upload tool without any extra dependencies
 server.registerTool(
   "slack_upload_file",
   {
-    title: "Upload File to Slack",
-    description: "Upload any file type to Slack. IMPORTANT: Use channel ID (not channel name with #).",
+    title: "Upload to Slack",
+    description: "Upload files, code, or content to Slack. Handles file paths, URLs, or direct text content. IMPORTANT: Use channel ID (not channel name with #).",
     inputSchema: {
       channel: z.string().describe("Channel ID ONLY (e.g., 'C1234567890'). Use slack_get_channels to get the ID."),
-      file_data: z.string().describe("Base64 encoded file data"),
+      content: z.string().describe("File path, URL, or direct text content to upload"),
       filename: z.string().describe("Name of the file including extension"),
       title: z.string().optional().describe("Title for the file"),
-      initial_comment: z.string().optional().describe("Simple message to accompany the file"),
-      filetype: z.string().optional().describe("File type")
+      initial_comment: z.string().optional().describe("Simple message to accompany the file")
     }
   },
-  async ({ channel, file_data, filename, title, initial_comment, filetype }) => {
+  async ({ channel, content, filename, title, initial_comment }) => {
     try {
       const slack = new WebClient(tokenData.access_token);
       
-      if (!file_data || !filename) {
-        throw new Error('Missing required file data or filename');
-      }
-      
-      // For large files, compress them server-side to avoid Claude crashes
       let fileBuffer;
-      if (file_data.length > 2000) {
-        // Large file - process server-side
-        console.log(`Processing large file server-side: ${file_data.length} characters`);
-        
+      let processingMethod;
+      
+      // Simple content detection
+      if (content.startsWith('/') || content.includes('\\') || (content.includes('.') && content.length < 500)) {
+        // File path
         try {
-          fileBuffer = Buffer.from(file_data, 'base64');
-          
-          // If it's an image and very large, compress it
-          if (filename.toLowerCase().match(/\.(jpg|jpeg|png|gif)$/i) && fileBuffer.length > 1024 * 1024) {
-            try {
-              fileBuffer = await sharp(fileBuffer)
-                .resize(1920, 1080, { fit: 'inside', withoutEnlargement: true })
-                .jpeg({ quality: 80 })
-                .toBuffer();
-              console.log('Applied compression to large image');
-            } catch (e) {
-              console.log('Compression failed, using original');
-            }
-          }
+          fileBuffer = await fs.readFile(content);
+          processingMethod = 'file_path';
+          console.log(`Read file from: ${content}`);
         } catch (error) {
-          throw new Error('Failed to process large file');
+          throw new Error(`Could not read file: ${content}`);
+        }
+      } else if (content.startsWith('http://') || content.startsWith('https://')) {
+        // URL download
+        try {
+          const response = await fetch(content);
+          if (!response.ok) throw new Error(`Download failed: ${response.statusText}`);
+          fileBuffer = Buffer.from(await response.arrayBuffer());
+          processingMethod = 'url_download';
+          console.log(`Downloaded from: ${content}`);
+        } catch (error) {
+          throw new Error(`Failed to download: ${error.message}`);
         }
       } else {
-        // Small file - process normally
-        try {
-          fileBuffer = Buffer.from(file_data, 'base64');
-        } catch (error) {
-          throw new Error('Invalid base64 data');
-        }
+        // Treat as text content (artifacts, code, etc.)
+        fileBuffer = Buffer.from(content, 'utf8');
+        processingMethod = 'text_content';
+        console.log(`Processing text content as file`);
       }
       
-      if (fileBuffer.length > 50 * 1024 * 1024) {
+      // Simple size check
+      if (fileBuffer.length > 50 * 1024 * 1024) { // 50MB
         throw new Error('File too large (50MB limit)');
+      }
+      
+      if (fileBuffer.length === 0) {
+        throw new Error('File is empty');
       }
       
       const channelId = channel.replace(/^[#@]/, '');
       
       // Simple comment
       let finalComment = initial_comment || "Here's the file";
-      if (finalComment.includes('**') || finalComment.includes('*')) {
+      if (finalComment.includes('**') || finalComment.includes('*') || finalComment.length > 100) {
         finalComment = "Check this out";
       }
       
-      console.log(`Uploading: ${filename} (${(fileBuffer.length / 1024).toFixed(1)}KB)`);
+      console.log(`Uploading ${filename} (${(fileBuffer.length / 1024).toFixed(1)}KB) via ${processingMethod}`);
       
       const result = await slack.filesUploadV2({
         channel_id: channelId,
@@ -994,7 +993,7 @@ server.registerTool(
         filename: filename,
         title: title || filename,
         initial_comment: finalComment,
-        file_type: filetype || 'auto'
+        file_type: 'auto'
       });
       
       if (!result.ok) {
@@ -1005,8 +1004,10 @@ server.registerTool(
         content: [{
           type: "text",
           text: `✅ Successfully uploaded ${filename} (${(fileBuffer.length / 1024).toFixed(1)}KB) to ${channel}
-          
-Uploaded by: ${tokenData.user_name}`
+
+📋 Method: ${processingMethod}
+💬 Message: "${finalComment}"
+👤 Uploaded by: ${tokenData.user_name}`
         }]
       };
       
@@ -1015,101 +1016,18 @@ Uploaded by: ${tokenData.user_name}`
       return {
         content: [{
           type: "text",
-          text: `❌ Upload failed: ${error.message}`
+          text: `❌ Upload failed: ${error.message}
+
+💡 Supported formats:
+• File paths: "/path/to/file.pdf"
+• URLs: "https://example.com/file.jpg"
+• Text content: Direct code/text from Claude artifacts`
         }],
         isError: true
       };
     }
   }
 );
-  // Tool 13: Add reaction to message
-  server.registerTool(
-    "slack_add_reaction",
-    {
-      title: "Add Reaction to Message",
-      description: "Add an emoji reaction to a Slack message",
-      inputSchema: {
-        channel: z.string().describe("Channel ID or name where the message is located"),
-        timestamp: z.string().describe("Message timestamp (from message history or search results)"),
-        name: z.string().describe("Emoji name without colons (e.g., 'thumbsup', 'heart', 'fire', 'tada')")
-      }
-    },
-    async ({ channel, timestamp, name }) => {
-      try {
-        const slack = new WebClient(tokenData.access_token);
-        
-        // Add reaction to the message
-        await slack.reactions.add({
-          channel: channel.replace('#', ''),
-          timestamp: timestamp,
-          name: name.replace(/:/g, '') // Remove colons if user included them
-        });
-        
-        console.log(`👍 Reaction :${name}: added by ${tokenData.user_name} to message ${timestamp} in ${channel}`);
-        
-        return {
-          content: [{
-            type: "text",
-            text: `✅ Added :${name}: reaction to message!\n\nChannel: ${channel}\nMessage timestamp: ${timestamp}\nReaction: :${name}:\nAdded by: ${tokenData.user_name}`
-          }]
-        };
-      } catch (error) {
-        console.error(`❌ Add reaction failed for ${tokenData.user_name}:`, error.message);
-        return {
-          content: [{
-            type: "text",
-            text: `❌ Failed to add reaction: ${error.message}\n\nTip: Make sure the message timestamp is correct and you have permission to react in this channel.`
-          }],
-          isError: true
-        };
-      }
-    }
-  );
-
-  // Tool 14: Remove reaction from message
-  server.registerTool(
-    "slack_remove_reaction",
-    {
-      title: "Remove Reaction from Message", 
-      description: "Remove an emoji reaction from a Slack message",
-      inputSchema: {
-        channel: z.string().describe("Channel ID or name where the message is located"),
-        timestamp: z.string().describe("Message timestamp"),
-        name: z.string().describe("Emoji name without colons (e.g., 'thumbsup', 'heart', 'fire')")
-      }
-    },
-    async ({ channel, timestamp, name }) => {
-      try {
-        const slack = new WebClient(tokenData.access_token);
-        
-        // Remove reaction from the message
-        await slack.reactions.remove({
-          channel: channel.replace('#', ''),
-          timestamp: timestamp,
-          name: name.replace(/:/g, '')
-        });
-        
-        console.log(`👎 Reaction :${name}: removed by ${tokenData.user_name} from message ${timestamp} in ${channel}`);
-        
-        return {
-          content: [{
-            type: "text",
-            text: `✅ Removed :${name}: reaction from message!\n\nChannel: ${channel}\nMessage timestamp: ${timestamp}\nReaction removed: :${name}:\nRemoved by: ${tokenData.user_name}`
-          }]
-        };
-      } catch (error) {
-        console.error(`❌ Remove reaction failed for ${tokenData.user_name}:`, error.message);
-        return {
-          content: [{
-            type: "text",
-            text: `❌ Failed to remove reaction: ${error.message}\n\nTip: You can only remove reactions that you added, or you need admin permissions.`
-          }],
-          isError: true
-        };
-      }
-    }
-  );
-
   // Tool 15: Get reactions on a message
   server.registerTool(
     "slack_get_reactions",
