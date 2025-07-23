@@ -916,113 +916,97 @@ Keep it conversational and brief - let the filename speak for itself.`
   );
 
 // Simplified Slack File Upload - Less likely to crash Claude
-server.registerTool(
-  "slack_upload_file",
-  {
-    title: "Upload File to Slack",
-    description: "Upload any file type to Slack with improved validation and error handling. Use simple, natural messages - no markdown formatting. IMPORTANT: Use channel ID (not channel name with #) for the channel parameter.",
-    inputSchema: {
-      channel: z.string().describe("Channel ID ONLY (e.g., 'C1234567890' or user ID like 'U1234567890'). DO NOT use channel names with # (like '#general'). Use the actual channel ID from slack_get_channels."),
-      file_data: z.string().describe("Base64 encoded file data"),
-      filename: z.string().describe("Name of the file including extension"),
-      title: z.string().optional().describe("Title for the file"),
-      initial_comment: z.string().optional().describe("Simple message to accompany the file (avoid markdown, keep it natural and brief)"),
-      filetype: z.string().optional().describe("File type (e.g., 'png', 'jpg', 'pdf', 'txt', 'docx', 'xlsx')")
-    }
-  },
-  async ({ channel, file_data, filename, title, initial_comment, filetype }) => {
-    try {
-      const slack = new WebClient(tokenData.access_token);
-      
-      // Basic validation only
-      if (!file_data || !filename) {
-        throw new Error('Missing required file data or filename');
+  server.registerTool(
+    "slack_upload_file",
+    {
+      title: "Upload File to Slack",
+      description: "Upload a file or image to a Slack channel or DM. Use simple, natural messages - no markdown formatting.",
+      inputSchema: {
+        channel: z.string().describe("Channel ID (e.g., channel ID)"),
+        file_data: z.string().describe("Base64 encoded file data"),
+        filename: z.string().describe("Name of the file including extension"),
+        title: z.string().optional().describe("Title for the file"),
+        initial_comment: z.string().optional().describe("Simple message to accompany the file (avoid markdown, keep it natural and brief)"),
+        filetype: z.string().optional().describe("File type (e.g., 'png', 'jpg', 'pdf', 'txt')")
       }
-      
-      // Simple base64 validation
-      let fileBuffer;
+    },
+    async ({ channel, file_data, filename, title, initial_comment, filetype }) => {
       try {
-        fileBuffer = Buffer.from(file_data, 'base64');
-      } catch (error) {
-        throw new Error('Invalid base64 file data');
-      }
-      
-      // Basic size check (100MB limit)
-      if (fileBuffer.length > 100 * 1024 * 1024) {
-        throw new Error('File too large (100MB limit)');
-      }
-      
-      // Clean channel ID
-      const channelId = channel.replace(/^[#@]/, '');
-      
-      // Simple file type detection from extension
-      const getFileType = (filename) => {
-        const ext = filename.toLowerCase().split('.').pop();
-        const typeMap = {
-          'jpg': 'jpg', 'jpeg': 'jpg', 'png': 'png', 'gif': 'gif', 'pdf': 'pdf',
-          'doc': 'doc', 'docx': 'docx', 'txt': 'txt', 'csv': 'csv',
-          'xls': 'xls', 'xlsx': 'xlsx', 'zip': 'zip', 'json': 'json'
+        const slack = new WebClient(tokenData.access_token);
+        
+        // Convert base64 to buffer
+        const fileBuffer = Buffer.from(file_data, 'base64');
+        
+        // Clean channel ID (remove # or @ prefixes)
+        const channelId = channel.replace(/^[#@]/, '');
+        
+        console.log(`Attempting uploadV2: ${filename} to ${channelId}, size: ${fileBuffer.length} bytes`);
+        
+        // Use generic message if none provided or if it looks too technical/formatted
+        let finalComment = initial_comment;
+        if (!finalComment || 
+            finalComment.includes('**') || 
+            finalComment.includes('*') || 
+            finalComment.toLowerCase().includes('pdf format') ||
+            finalComment.toLowerCase().includes('demonstrates') ||
+            finalComment.length > 100) {
+          // Use simple, natural alternatives
+          const genericMessages = [
+            "Check this out",
+            "Here you go",
+            "Sharing this with the team",
+            "Take a look",
+            "Here's the file"
+          ];
+          finalComment = genericMessages[Math.floor(Math.random() * genericMessages.length)];
+        }
+        
+        // Use the uploadV2 method that wraps the new API
+        const result = await slack.filesUploadV2({
+          channel_id: channelId,
+          file: fileBuffer,
+          filename: filename,
+          title: title || filename,
+          initial_comment: finalComment,
+          file_type: filetype
+        });
+        
+        console.log(`📎 File uploaded by ${tokenData.user_name} to ${channel}: ${filename}`);
+        console.log('Upload result:', result.ok ? 'Success' : result.error);
+        
+        if (!result.ok) {
+          throw new Error(result.error || 'Upload failed');
+        }
+        
+        // The uploadV2 response structure might be different
+        const fileInfo = result.file || result.files?.[0] || {};
+        
+        return {
+          content: [{
+            type: "text",
+            text: `✅ File uploaded successfully to ${channel}!\n\nFile: ${filename}\nMessage: "${finalComment}"\nUploaded by: ${tokenData.user_name}`
+          }]
         };
-        return typeMap[ext] || 'binary';
-      };
-      
-      const detectedType = filetype || getFileType(filename);
-      
-      // Use simple comment if none provided or if it looks formatted
-      let finalComment = initial_comment;
-      if (!finalComment || finalComment.includes('**') || finalComment.includes('*')) {
-        finalComment = "Here's the file";
+        
+      } catch (error) {
+        console.error(`❌ File upload failed for ${tokenData.user_name}:`, error);
+        
+        // Enhanced error reporting
+        let errorDetails = error.message;
+        if (error.data && error.data.error) {
+          errorDetails = error.data.error;
+        }
+        
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Failed to upload file: ${errorDetails}\n\nDebugging info:\n- Channel: ${channel}\n- Filename: ${filename}\n- File size: ${Buffer.from(file_data, 'base64').length} bytes\n- User: ${tokenData.user_name}\n- Method: uploadV2\n\nTip: Make sure the channel exists and you have permission to post files there.`
+          }],
+          isError: true
+        };
       }
-      
-      console.log(`Uploading: ${filename} (${(fileBuffer.length / 1024).toFixed(1)}KB)`);
-      
-      // Use filesUploadV2 for most cases
-      const result = await slack.filesUploadV2({
-        channel_id: channelId,
-        file: fileBuffer,
-        filename: filename,
-        title: title || filename,
-        initial_comment: finalComment,
-        file_type: detectedType
-      });
-      
-      if (!result.ok) {
-        throw new Error(result.error || 'Upload failed');
-      }
-      
-      return {
-        content: [{
-          type: "text",
-          text: `✅ File uploaded successfully!
-
-File: ${filename}
-Size: ${(fileBuffer.length / 1024 / 1024).toFixed(2)} MB
-Type: ${detectedType}
-Channel: ${channel}
-Message: "${finalComment}"`
-        }]
-      };
-      
-    } catch (error) {
-      console.error(`File upload failed:`, error.message);
-      
-      // Simple error response
-      return {
-        content: [{
-          type: "text",
-          text: `❌ File upload failed: ${error.message}
-
-Basic troubleshooting:
-• Check channel permissions
-• Verify file size is under 100MB
-• Ensure file data is properly base64 encoded
-• Try a smaller test file first`
-        }],
-        isError: true
-      };
     }
-  }
-);
+  );
   // Tool 13: Add reaction to message
   server.registerTool(
     "slack_add_reaction",
