@@ -1004,6 +1004,99 @@ server.registerTool(
     }
   }
 );
+ server.registerTool(
+    "slack_upload_image",
+    {
+      title: "Upload Image to Slack",
+      description: "Upload an image to a Slack channel or DM with preview. Use simple, natural messages.",
+      inputSchema: {
+        channel: z.string().describe("Channel ID or name (e.g., #general, @username, or channel ID)"),
+        image_data: z.string().describe("Base64 encoded image data"),
+        filename: z.string().describe("Name of the image file including extension"),
+        alt_text: z.string().optional().describe("Alt text for the image"),
+        title: z.string().optional().describe("Title for the image"),
+        initial_comment: z.string().optional().describe("Simple message to accompany the image (keep it natural, no markdown)")
+      }
+    },
+    async ({ channel, image_data, filename, alt_text, title, initial_comment }) => {
+      try {
+        const slack = new WebClient(tokenData.access_token);
+        
+        // Convert base64 to buffer
+        const imageBuffer = Buffer.from(image_data, 'base64');
+        const channelId = channel.replace(/^[#@]/, '');
+        
+        // Determine image type from filename
+        const extension = filename.toLowerCase().split('.').pop();
+        const imageType = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'].includes(extension) ? extension : 'png';
+        
+        console.log(`Attempting image uploadV2: ${filename} to ${channelId}, size: ${imageBuffer.length} bytes`);
+        
+        // Use generic message if none provided or if it looks too technical/formatted
+        let finalComment = initial_comment;
+        if (!finalComment || 
+            finalComment.includes('**') || 
+            finalComment.includes('*') || 
+            finalComment.toLowerCase().includes('demonstrates') ||
+            finalComment.length > 80) {
+          // Use simple, natural alternatives for images
+          const genericMessages = [
+            "Check this out",
+            "Take a look",
+            "Sharing this image",
+            "Here's a screenshot",
+            "See attached"
+          ];
+          finalComment = genericMessages[Math.floor(Math.random() * genericMessages.length)];
+        }
+        
+        // Combine alt_text naturally if provided
+        if (alt_text && !finalComment.toLowerCase().includes(alt_text.toLowerCase())) {
+          finalComment = `${finalComment} - ${alt_text}`;
+        }
+        
+        const result = await slack.filesUploadV2({
+          channel_id: channelId,
+          file: imageBuffer,
+          filename: filename,
+          title: title || filename,
+          initial_comment: finalComment,
+          file_type: imageType
+        });
+        
+        console.log(`🖼️ Image uploaded by ${tokenData.user_name} to ${channel}: ${filename}`);
+        
+        if (!result.ok) {
+          throw new Error(result.error || 'Upload failed');
+        }
+        
+        const fileInfo = result.file || result.files?.[0] || {};
+        
+        return {
+          content: [{
+            type: "text",
+            text: `✅ Image uploaded successfully to ${channel}!\n\nImage: ${filename}\nMessage: "${finalComment}"\nSize: ${imageBuffer.length} bytes\nUploaded by: ${tokenData.user_name}`
+          }]
+        };
+        
+      } catch (error) {
+        console.error(`❌ Image upload failed for ${tokenData.user_name}:`, error);
+        
+        let errorDetails = error.message;
+        if (error.data && error.data.error) {
+          errorDetails = error.data.error;
+        }
+        
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Failed to upload image: ${errorDetails}\n\nDebugging info:\n- Channel: ${channel}\n- Filename: ${filename}\n- File size: ${Buffer.from(image_data, 'base64').length} bytes\n- User: ${tokenData.user_name}\n- Method: uploadV2`
+          }],
+          isError: true
+        };
+      }
+    }
+  );
   // Tool 13: Add reaction to message
   server.registerTool(
     "slack_add_reaction",
