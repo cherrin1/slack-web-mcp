@@ -915,280 +915,253 @@ Keep it conversational and brief - let the filename speak for itself.`
     }
   );
 
-// Remove these from your package.json dependencies:
-// "sharp": "^0.33.5",
-// "multer": "^1.4.5-lts.1"
-
-// Simple upload tool without any extra dependencies
 server.registerTool(
-  "slack_upload_file",
+  "slack_add_reaction",
   {
-    title: "Upload to Slack",
-    description: "Upload files, code, or content to Slack. Handles file paths, URLs, or direct text content. IMPORTANT: Use channel ID (not channel name with #).",
+    title: "Add Reaction to Message",
+    description: "Add an emoji reaction to a Slack message",
     inputSchema: {
-      channel: z.string().describe("Channel ID ONLY (e.g., 'C1234567890'). Use slack_get_channels to get the ID."),
-      content: z.string().describe("File path, URL, or direct text content to upload"),
-      filename: z.string().describe("Name of the file including extension"),
-      title: z.string().optional().describe("Title for the file"),
-      initial_comment: z.string().optional().describe("Simple message to accompany the file")
+      channel: z.string().describe("Channel ID or name where the message is located"),
+      timestamp: z.string().describe("Message timestamp (from message history or search results)"),
+      name: z.string().describe("Emoji name without colons (e.g., 'thumbsup', 'heart', 'fire', 'tada')")
     }
   },
-  async ({ channel, content, filename, title, initial_comment }) => {
+  async ({ channel, timestamp, name }) => {
     try {
       const slack = new WebClient(tokenData.access_token);
       
-      let fileBuffer;
-      let processingMethod;
-      
-      // Simple content detection
-      if (content.startsWith('/') || content.includes('\\') || (content.includes('.') && content.length < 500)) {
-        // File path
-        try {
-          fileBuffer = await fs.readFile(content);
-          processingMethod = 'file_path';
-          console.log(`Read file from: ${content}`);
-        } catch (error) {
-          throw new Error(`Could not read file: ${content}`);
-        }
-      } else if (content.startsWith('http://') || content.startsWith('https://')) {
-        // URL download
-        try {
-          const response = await fetch(content);
-          if (!response.ok) throw new Error(`Download failed: ${response.statusText}`);
-          fileBuffer = Buffer.from(await response.arrayBuffer());
-          processingMethod = 'url_download';
-          console.log(`Downloaded from: ${content}`);
-        } catch (error) {
-          throw new Error(`Failed to download: ${error.message}`);
-        }
-      } else {
-        // Treat as text content (artifacts, code, etc.)
-        fileBuffer = Buffer.from(content, 'utf8');
-        processingMethod = 'text_content';
-        console.log(`Processing text content as file`);
-      }
-      
-      // Simple size check
-      if (fileBuffer.length > 50 * 1024 * 1024) { // 50MB
-        throw new Error('File too large (50MB limit)');
-      }
-      
-      if (fileBuffer.length === 0) {
-        throw new Error('File is empty');
-      }
-      
-      const channelId = channel.replace(/^[#@]/, '');
-      
-      // Simple comment
-      let finalComment = initial_comment || "Here's the file";
-      if (finalComment.includes('**') || finalComment.includes('*') || finalComment.length > 100) {
-        finalComment = "Check this out";
-      }
-      
-      console.log(`Uploading ${filename} (${(fileBuffer.length / 1024).toFixed(1)}KB) via ${processingMethod}`);
-      
-      const result = await slack.filesUploadV2({
-        channel_id: channelId,
-        file: fileBuffer,
-        filename: filename,
-        title: title || filename,
-        initial_comment: finalComment,
-        file_type: 'auto'
+      // Add reaction to the message
+      await slack.reactions.add({
+        channel: channel.replace('#', ''),
+        timestamp: timestamp,
+        name: name.replace(/:/g, '') // Remove colons if user included them
       });
       
-      if (!result.ok) {
-        throw new Error(result.error || 'Upload failed');
-      }
+      console.log(`👍 Reaction :${name}: added by ${tokenData.user_name} to message ${timestamp} in ${channel}`);
       
       return {
         content: [{
           type: "text",
-          text: `✅ Successfully uploaded ${filename} (${(fileBuffer.length / 1024).toFixed(1)}KB) to ${channel}
-
-📋 Method: ${processingMethod}
-💬 Message: "${finalComment}"
-👤 Uploaded by: ${tokenData.user_name}`
+          text: `✅ Added :${name}: reaction to message!\n\nChannel: ${channel}\nMessage timestamp: ${timestamp}\nReaction: :${name}:\nAdded by: ${tokenData.user_name}`
         }]
       };
-      
     } catch (error) {
-      console.error(`Upload error: ${error.message}`);
+      console.error(`❌ Add reaction failed for ${tokenData.user_name}:`, error.message);
       return {
         content: [{
           type: "text",
-          text: `❌ Upload failed: ${error.message}
-
-💡 Supported formats:
-• File paths: "/path/to/file.pdf"
-• URLs: "https://example.com/file.jpg"
-• Text content: Direct code/text from Claude artifacts`
+          text: `❌ Failed to add reaction: ${error.message}\n\nTip: Make sure the message timestamp is correct and you have permission to react in this channel.`
         }],
         isError: true
       };
     }
   }
 );
-  // Tool 15: Get reactions on a message
-  server.registerTool(
-    "slack_get_reactions",
-    {
-      title: "Get Message Reactions",
-      description: "Get all reactions on a specific Slack message",
-      inputSchema: {
-        channel: z.string().describe("Channel ID or name where the message is located"),
-        timestamp: z.string().describe("Message timestamp")
-      }
-    },
-    async ({ channel, timestamp }) => {
-      try {
-        const slack = new WebClient(tokenData.access_token);
-        
-        // Get message with reactions
-        const result = await slack.conversations.history({
-          channel: channel.replace('#', ''),
-          latest: timestamp,
-          oldest: timestamp,
-          inclusive: true,
-          limit: 1
-        });
-        
-        if (!result.messages || result.messages.length === 0) {
-          return {
-            content: [{
-              type: "text", 
-              text: `❌ Message not found at timestamp ${timestamp} in ${channel}`
-            }],
-            isError: true
-          };
-        }
-        
-        const message = result.messages[0];
-        const reactions = message.reactions || [];
-        
-        if (reactions.length === 0) {
-          return {
-            content: [{
-              type: "text",
-              text: `📭 No reactions found on this message in ${channel}\n\nMessage timestamp: ${timestamp}\nChecked by: ${tokenData.user_name}`
-            }]
-          };
-        }
-        
-        // Format reactions with user counts
-        const reactionList = reactions.map(reaction => {
-          const users = reaction.users || [];
-          const userCount = reaction.count || users.length;
-          return `• :${reaction.name}: (${userCount} ${userCount === 1 ? 'person' : 'people'})`;
-        }).join('\n');
-        
+
+// Tool: Remove reaction from message
+server.registerTool(
+  "slack_remove_reaction",
+  {
+    title: "Remove Reaction from Message", 
+    description: "Remove an emoji reaction from a Slack message",
+    inputSchema: {
+      channel: z.string().describe("Channel ID or name where the message is located"),
+      timestamp: z.string().describe("Message timestamp"),
+      name: z.string().describe("Emoji name without colons (e.g., 'thumbsup', 'heart', 'fire')")
+    }
+  },
+  async ({ channel, timestamp, name }) => {
+    try {
+      const slack = new WebClient(tokenData.access_token);
+      
+      // Remove reaction from the message
+      await slack.reactions.remove({
+        channel: channel.replace('#', ''),
+        timestamp: timestamp,
+        name: name.replace(/:/g, '')
+      });
+      
+      console.log(`👎 Reaction :${name}: removed by ${tokenData.user_name} from message ${timestamp} in ${channel}`);
+      
+      return {
+        content: [{
+          type: "text",
+          text: `✅ Removed :${name}: reaction from message!\n\nChannel: ${channel}\nMessage timestamp: ${timestamp}\nReaction removed: :${name}:\nRemoved by: ${tokenData.user_name}`
+        }]
+      };
+    } catch (error) {
+      console.error(`❌ Remove reaction failed for ${tokenData.user_name}:`, error.message);
+      return {
+        content: [{
+          type: "text",
+          text: `❌ Failed to remove reaction: ${error.message}\n\nTip: You can only remove reactions that you added, or you need admin permissions.`
+        }],
+        isError: true
+      };
+    }
+  }
+);
+
+// Tool: Get reactions on a message
+server.registerTool(
+  "slack_get_reactions",
+  {
+    title: "Get Message Reactions",
+    description: "Get all reactions on a specific Slack message",
+    inputSchema: {
+      channel: z.string().describe("Channel ID or name where the message is located"),
+      timestamp: z.string().describe("Message timestamp")
+    }
+  },
+  async ({ channel, timestamp }) => {
+    try {
+      const slack = new WebClient(tokenData.access_token);
+      
+      // Get message with reactions
+      const result = await slack.conversations.history({
+        channel: channel.replace('#', ''),
+        latest: timestamp,
+        oldest: timestamp,
+        inclusive: true,
+        limit: 1
+      });
+      
+      if (!result.messages || result.messages.length === 0) {
         return {
           content: [{
-            type: "text",
-            text: `👍 Reactions on message in ${channel}:\n\n${reactionList}\n\nMessage timestamp: ${timestamp}\nTotal reactions: ${reactions.length}\nChecked by: ${tokenData.user_name}`
-          }]
-        };
-      } catch (error) {
-        console.error(`❌ Get reactions failed for ${tokenData.user_name}:`, error.message);
-        return {
-          content: [{
-            type: "text",
-            text: `❌ Failed to get reactions: ${error.message}`
+            type: "text", 
+            text: `❌ Message not found at timestamp ${timestamp} in ${channel}`
           }],
           isError: true
         };
       }
-    }
-  );
-
-  // Tool 16: React to latest message in channel
-  server.registerTool(
-    "slack_react_to_latest",
-    {
-      title: "React to Latest Message",
-      description: "Add a reaction to the most recent message in a channel",
-      inputSchema: {
-        channel: z.string().describe("Channel ID or name"),
-        name: z.string().describe("Emoji name without colons (e.g., 'thumbsup', 'heart', 'fire', 'tada')"),
-        exclude_self: z.boolean().optional().describe("Skip your own messages").default(true)
-      }
-    },
-    async ({ channel, name, exclude_self = true }) => {
-      try {
-        const slack = new WebClient(tokenData.access_token);
-        
-        // Get recent messages
-        const messages = await slack.conversations.history({
-          channel: channel.replace('#', ''),
-          limit: 10
-        });
-        
-        if (!messages.messages || messages.messages.length === 0) {
-          return {
-            content: [{
-              type: "text",
-              text: `❌ No messages found in ${channel}`
-            }],
-            isError: true
-          };
-        }
-        
-        // Find the latest message (optionally excluding own messages)
-        let targetMessage = null;
-        for (const msg of messages.messages) {
-          if (exclude_self && msg.user === tokenData.user_id) {
-            continue; // Skip own messages
-          }
-          targetMessage = msg;
-          break;
-        }
-        
-        if (!targetMessage) {
-          return {
-            content: [{
-              type: "text",
-              text: `❌ No suitable message found in ${channel} (excluding your own messages)`
-            }],
-            isError: true
-          };
-        }
-        
-        // Add reaction to the message
-        await slack.reactions.add({
-          channel: channel.replace('#', ''),
-          timestamp: targetMessage.ts,
-          name: name.replace(/:/g, '')
-        });
-        
-        console.log(`👍 Reaction :${name}: added by ${tokenData.user_name} to latest message in ${channel}`);
-        
-        // Get user name for the message author
-        let authorName = targetMessage.user;
-        try {
-          const userInfo = await slack.users.info({ user: targetMessage.user });
-          authorName = userInfo.user.real_name || userInfo.user.name;
-        } catch (e) {
-          // Keep original user ID if lookup fails
-        }
-        
+      
+      const message = result.messages[0];
+      const reactions = message.reactions || [];
+      
+      if (reactions.length === 0) {
         return {
           content: [{
             type: "text",
-            text: `✅ Added :${name}: reaction to latest message!\n\nChannel: ${channel}\nMessage author: ${authorName}\nMessage preview: "${(targetMessage.text || '').substring(0, 100)}${targetMessage.text && targetMessage.text.length > 100 ? '...' : ''}"\nReaction: :${name}:\nAdded by: ${tokenData.user_name}`
+            text: `📭 No reactions found on this message in ${channel}\n\nMessage timestamp: ${timestamp}\nChecked by: ${tokenData.user_name}`
           }]
         };
-      } catch (error) {
-        console.error(`❌ React to latest failed for ${tokenData.user_name}:`, error.message);
+      }
+      
+      // Format reactions with user counts
+      const reactionList = reactions.map(reaction => {
+        const users = reaction.users || [];
+        const userCount = reaction.count || users.length;
+        return `• :${reaction.name}: (${userCount} ${userCount === 1 ? 'person' : 'people'})`;
+      }).join('\n');
+      
+      return {
+        content: [{
+          type: "text",
+          text: `👍 Reactions on message in ${channel}:\n\n${reactionList}\n\nMessage timestamp: ${timestamp}\nTotal reactions: ${reactions.length}\nChecked by: ${tokenData.user_name}`
+        }]
+      };
+    } catch (error) {
+      console.error(`❌ Get reactions failed for ${tokenData.user_name}:`, error.message);
+      return {
+        content: [{
+          type: "text",
+          text: `❌ Failed to get reactions: ${error.message}`
+        }],
+        isError: true
+      };
+    }
+  }
+);
+
+// Tool: React to latest message in channel
+server.registerTool(
+  "slack_react_to_latest",
+  {
+    title: "React to Latest Message",
+    description: "Add a reaction to the most recent message in a channel",
+    inputSchema: {
+      channel: z.string().describe("Channel ID or name"),
+      name: z.string().describe("Emoji name without colons (e.g., 'thumbsup', 'heart', 'fire', 'tada')"),
+      exclude_self: z.boolean().optional().describe("Skip your own messages").default(true)
+    }
+  },
+  async ({ channel, name, exclude_self = true }) => {
+    try {
+      const slack = new WebClient(tokenData.access_token);
+      
+      // Get recent messages
+      const messages = await slack.conversations.history({
+        channel: channel.replace('#', ''),
+        limit: 10
+      });
+      
+      if (!messages.messages || messages.messages.length === 0) {
         return {
           content: [{
             type: "text",
-            text: `❌ Failed to react to latest message: ${error.message}`
+            text: `❌ No messages found in ${channel}`
           }],
           isError: true
         };
       }
+      
+      // Find the latest message (optionally excluding own messages)
+      let targetMessage = null;
+      for (const msg of messages.messages) {
+        if (exclude_self && msg.user === tokenData.user_id) {
+          continue; // Skip own messages
+        }
+        targetMessage = msg;
+        break;
+      }
+      
+      if (!targetMessage) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ No suitable message found in ${channel} (excluding your own messages)`
+          }],
+          isError: true
+        };
+      }
+      
+      // Add reaction to the message
+      await slack.reactions.add({
+        channel: channel.replace('#', ''),
+        timestamp: targetMessage.ts,
+        name: name.replace(/:/g, '')
+      });
+      
+      console.log(`👍 Reaction :${name}: added by ${tokenData.user_name} to latest message in ${channel}`);
+      
+      // Get user name for the message author
+      let authorName = targetMessage.user;
+      try {
+        const userInfo = await slack.users.info({ user: targetMessage.user });
+        authorName = userInfo.user.real_name || userInfo.user.name;
+      } catch (e) {
+        // Keep original user ID if lookup fails
+      }
+      
+      return {
+        content: [{
+          type: "text",
+          text: `✅ Added :${name}: reaction to latest message!\n\nChannel: ${channel}\nMessage author: ${authorName}\nMessage preview: "${(targetMessage.text || '').substring(0, 100)}${targetMessage.text && targetMessage.text.length > 100 ? '...' : ''}"\nReaction: :${name}:\nAdded by: ${tokenData.user_name}`
+        }]
+      };
+    } catch (error) {
+      console.error(`❌ React to latest failed for ${tokenData.user_name}:`, error.message);
+      return {
+        content: [{
+          type: "text",
+          text: `❌ Failed to react to latest message: ${error.message}`
+        }],
+        isError: true
+      };
     }
-  );
-
+  }
+);
   // Log critical user proxy reminder
   console.log(`🚨 USER PROXY MODE: All Slack communications will appear as ${tokenData.user_name} (${tokenData.team_name})`);
   console.log(`📋 Available resources: system-initialization, user-proxy-guidelines, user-context, communication-best-practices, file-sharing-guidelines`);
