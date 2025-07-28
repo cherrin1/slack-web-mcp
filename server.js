@@ -1162,6 +1162,361 @@ server.registerTool(
     }
   }
 );
+  // Add these tools to your createMCPServer function, after the existing tools
+
+// Tool: List files in workspace
+server.registerTool(
+  "slack_list_files",
+  {
+    title: "List Slack Files",
+    description: "List files uploaded to the workspace with filtering options",
+    inputSchema: {
+      channel: z.string().optional().describe("Filter by specific channel ID or name"),
+      user: z.string().optional().describe("Filter by specific user ID or @username"),
+      types: z.string().optional().describe("File types to include (e.g., 'images,pdfs,docs')"),
+      count: z.number().optional().describe("Number of files to return (max 100)").default(20)
+    }
+  },
+  async ({ channel, user, types, count = 20 }) => {
+    try {
+      const slack = new WebClient(tokenData.access_token);
+      
+      const params = {
+        count: Math.min(count, 100),
+        page: 1
+      };
+      
+      // Add filters if provided
+      if (channel) {
+        params.channel = channel.replace('#', '');
+      }
+      if (user) {
+        params.user = user.replace('@', '');
+      }
+      if (types) {
+        params.types = types;
+      }
+      
+      const result = await slack.files.list(params);
+      
+      if (!result.files || result.files.length === 0) {
+        return {
+          content: [{
+            type: "text",
+            text: `📁 No files found in ${tokenData.team_name}${channel ? ` in channel ${channel}` : ''}${user ? ` from user ${user}` : ''}\n\n*Searched by: ${tokenData.user_name}*`
+          }]
+        };
+      }
+      
+      const fileList = await Promise.all(
+        result.files.map(async (file) => {
+          const fileSize = file.size ? `${Math.round(file.size / 1024)}KB` : 'Unknown size';
+          const uploadDate = new Date(file.timestamp * 1000).toLocaleDateString();
+          
+          // Get uploader name
+          let uploaderName = file.user;
+          try {
+            const userInfo = await slack.users.info({ user: file.user });
+            uploaderName = userInfo.user.real_name || userInfo.user.name;
+          } catch (e) {
+            // Keep original user ID if lookup fails
+          }
+          
+          // Get channel name if file is in a channel
+          let channelName = 'Direct Message';
+          if (file.channels && file.channels.length > 0) {
+            try {
+              const channelInfo = await slack.conversations.info({ channel: file.channels[0] });
+              channelName = `#${channelInfo.channel.name}`;
+            } catch (e) {
+              channelName = file.channels[0];
+            }
+          }
+          
+          return `📄 **${file.name}** (${file.filetype.toUpperCase()})
+   • ID: ${file.id}
+   • Size: ${fileSize} 
+   • Uploaded: ${uploadDate} by ${uploaderName}
+   • Channel: ${channelName}
+   • Comments: ${file.comments_count || 0}${file.title ? `\n   • Title: ${file.title}` : ''}`;
+        })
+      );
+      
+      return {
+        content: [{
+          type: "text",
+          text: `📁 Files in ${tokenData.team_name}:\n\n${fileList.join('\n\n')}\n\n*Total: ${result.files.length} files • Retrieved by: ${tokenData.user_name}*`
+        }]
+      };
+    } catch (error) {
+      console.error(`❌ List files failed for ${tokenData.user_name}:`, error.message);
+      return {
+        content: [{
+          type: "text",
+          text: `❌ Failed to list files: ${error.message}`
+        }],
+        isError: true
+      };
+    }
+  }
+);
+
+// Tool: Get file information and content
+server.registerTool(
+  "slack_get_file",
+  {
+    title: "Get Slack File Content",
+    description: "Get detailed information and content of a specific file",
+    inputSchema: {
+      file_id: z.string().describe("File ID to retrieve")
+    }
+  },
+  async ({ file_id }) => {
+    try {
+      const slack = new WebClient(tokenData.access_token);
+      
+      // Get file info
+      const fileInfo = await slack.files.info({ file: file_id });
+      
+      if (!fileInfo.file) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ File not found: ${file_id}`
+          }],
+          isError: true
+        };
+      }
+      
+      const file = fileInfo.file;
+      const fileSize = file.size ? `${Math.round(file.size / 1024)}KB` : 'Unknown size';
+      const uploadDate = new Date(file.timestamp * 1000).toLocaleString();
+      
+      // Get uploader name
+      let uploaderName = file.user;
+      try {
+        const userInfo = await slack.users.info({ user: file.user });
+        uploaderName = userInfo.user.real_name || userInfo.user.name;
+      } catch (e) {
+        // Keep original user ID if lookup fails
+      }
+      
+      // Get channel names
+      let channelNames = 'Direct Message';
+      if (file.channels && file.channels.length > 0) {
+        const channelPromises = file.channels.map(async (channelId) => {
+          try {
+            const channelInfo = await slack.conversations.info({ channel: channelId });
+            return `#${channelInfo.channel.name}`;
+          } catch (e) {
+            return channelId;
+          }
+        });
+        const channels = await Promise.all(channelPromises);
+        channelNames = channels.join(', ');
+      }
+      
+      let response = `📄 **File Details:**
+
+**Name:** ${file.name}
+**ID:** ${file.id}
+**Type:** ${file.filetype.toUpperCase()}
+**Size:** ${fileSize}
+**Uploaded:** ${uploadDate} by ${uploaderName}
+**Channels:** ${channelNames}
+**Comments:** ${file.comments_count || 0}
+**Public:** ${file.is_public ? 'Yes' : 'No'}`;
+
+      if (file.title) response += `\n**Title:** ${file.title}`;
+      if (file.initial_comment) response += `\n**Description:** ${file.initial_comment.comment}`;
+      
+      // For text files, try to get the content
+      if (file.mimetype && file.mimetype.startsWith('text/') && file.url_private) {
+        try {
+          const contentResponse = await fetch(file.url_private, {
+            headers: {
+              'Authorization': `Bearer ${tokenData.access_token}`
+            }
+          });
+          
+          if (contentResponse.ok) {
+            const content = await contentResponse.text();
+            response += `\n\n**📝 File Content:**\n\`\`\`\n${content.substring(0, 2000)}${content.length > 2000 ? '\n... (content truncated)' : ''}\n\`\`\``;
+          }
+        } catch (contentError) {
+          response += `\n\n**Note:** Could not retrieve file content: ${contentError.message}`;
+        }
+      } else if (file.url_private) {
+        response += `\n\n**Download URL:** ${file.url_private}`;
+        response += `\n**Note:** This file type (${file.filetype}) cannot be displayed as text. Use the download URL to access the file.`;
+      }
+      
+      response += `\n\n*Retrieved by: ${tokenData.user_name}*`;
+      
+      return {
+        content: [{
+          type: "text",
+          text: response
+        }]
+      };
+    } catch (error) {
+      console.error(`❌ Get file failed for ${tokenData.user_name}:`, error.message);
+      return {
+        content: [{
+          type: "text",
+          text: `❌ Failed to get file: ${error.message}`
+        }],
+        isError: true
+      };
+    }
+  }
+);
+
+// Tool: Search files by name or content
+server.registerTool(
+  "slack_search_files",
+  {
+    title: "Search Slack Files",
+    description: "Search for files by name, content, or other criteria",
+    inputSchema: {
+      query: z.string().describe("Search query (filename, content, or keywords)"),
+      count: z.number().optional().describe("Number of results to return (max 20)").default(10)
+    }
+  },
+  async ({ query, count = 10 }) => {
+    try {
+      const slack = new WebClient(tokenData.access_token);
+      
+      const result = await slack.search.files({
+        query: query,
+        count: Math.min(count, 20)
+      });
+      
+      if (!result.files || result.files.total === 0) {
+        return {
+          content: [{
+            type: "text",
+            text: `🔍 No files found for query: "${query}"\n\n*Searched by: ${tokenData.user_name}*`
+          }]
+        };
+      }
+      
+      const fileList = await Promise.all(
+        result.files.matches.slice(0, count).map(async (file) => {
+          const fileSize = file.size ? `${Math.round(file.size / 1024)}KB` : 'Unknown size';
+          const uploadDate = new Date(file.timestamp * 1000).toLocaleDateString();
+          
+          // Get uploader name
+          let uploaderName = file.user;
+          try {
+            const userInfo = await slack.users.info({ user: file.user });
+            uploaderName = userInfo.user.real_name || userInfo.user.name;
+          } catch (e) {
+            // Keep original user ID if lookup fails
+          }
+          
+          return `📄 **${file.name}** (${file.filetype.toUpperCase()})
+   • ID: ${file.id}
+   • Size: ${fileSize}
+   • Uploaded: ${uploadDate} by ${uploaderName}${file.title ? `\n   • Title: ${file.title}` : ''}`;
+        })
+      );
+      
+      return {
+        content: [{
+          type: "text",
+          text: `🔍 Search results for "${query}":\n\n${fileList.join('\n\n')}\n\n*Found ${result.files.total} total files • Showing ${fileList.length} • Searched by: ${tokenData.user_name}*`
+        }]
+      };
+    } catch (error) {
+      console.error(`❌ Search files failed for ${tokenData.user_name}:`, error.message);
+      return {
+        content: [{
+          type: "text",
+          text: `❌ Failed to search files: ${error.message}`
+        }],
+        isError: true
+      };
+    }
+  }
+);
+
+// Tool: Get file comments
+server.registerTool(
+  "slack_get_file_comments",
+  {
+    title: "Get File Comments",
+    description: "Get comments and discussions on a specific file",
+    inputSchema: {
+      file_id: z.string().describe("File ID to get comments for")
+    }
+  },
+  async ({ file_id }) => {
+    try {
+      const slack = new WebClient(tokenData.access_token);
+      
+      // Get file info with comments
+      const fileInfo = await slack.files.info({ 
+        file: file_id,
+        count: 100 // Get up to 100 comments
+      });
+      
+      if (!fileInfo.file) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ File not found: ${file_id}`
+          }],
+          isError: true
+        };
+      }
+      
+      const file = fileInfo.file;
+      
+      if (!file.comments || file.comments.length === 0) {
+        return {
+          content: [{
+            type: "text",
+            text: `💬 No comments found on file: ${file.name}\n\n*Checked by: ${tokenData.user_name}*`
+          }]
+        };
+      }
+      
+      const commentList = await Promise.all(
+        file.comments.map(async (comment) => {
+          const commentDate = new Date(comment.timestamp * 1000).toLocaleString();
+          
+          // Get commenter name
+          let commenterName = comment.user;
+          try {
+            const userInfo = await slack.users.info({ user: comment.user });
+            commenterName = userInfo.user.real_name || userInfo.user.name;
+          } catch (e) {
+            // Keep original user ID if lookup fails
+          }
+          
+          return `💬 **${commenterName}** (${commentDate}):\n${comment.comment}`;
+        })
+      );
+      
+      return {
+        content: [{
+          type: "text",
+          text: `💬 Comments on file: **${file.name}**\n\n${commentList.join('\n\n')}\n\n*Total: ${file.comments.length} comments • Retrieved by: ${tokenData.user_name}*`
+        }]
+      };
+    } catch (error) {
+      console.error(`❌ Get file comments failed for ${tokenData.user_name}:`, error.message);
+      return {
+        content: [{
+          type: "text",
+          text: `❌ Failed to get file comments: ${error.message}`
+        }],
+        isError: true
+      };
+    }
+  }
+);
   // Log critical user proxy reminder
   console.log(`🚨 USER PROXY MODE: All Slack communications will appear as ${tokenData.user_name} (${tokenData.team_name})`);
   console.log(`📋 Available resources: system-initialization, user-proxy-guidelines, user-context, communication-best-practices, file-sharing-guidelines`);
