@@ -1,17 +1,16 @@
-name: Deploy to Azure Container App
+name: Deploy to Azure Container Apps
 
 on:
   push:
-    branches: [codespace-musical-fortnight-4jr6qw7w5x94fqgxv]
+    branches: [ codespace-musical-fortnight-4jr6qw7w5x94fqgxv ]
+  pull_request:
+    branches: [ codespace-musical-fortnight-4jr6qw7w5x94fqgxv ]
 
-permissions:
-  id-token: write
-  contents: read
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-
+    environment: slack
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -24,25 +23,24 @@ jobs:
       with:
         registry: caitlynregistry.azurecr.io
         username: caitlynregistry
-        password: ${{ secrets.ACR_PASSWORD }}
+        password: ${{ secrets.AZURE_REGISTRY_PASSWORD }}
 
-    - name: Build and Push Docker Image
+    - name: Build and push Docker image
       uses: docker/build-push-action@v5
       with:
         context: .
         push: true
         tags: caitlynregistry.azurecr.io/slack-mcp-server:latest
-
-    - name: Azure Login via Managed Identity
-      uses: azure/login@v1
-      with:
-        client-id: ${{ secrets.AZURE_CLIENT_ID }}
-        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-    - name: Deploy to Azure Container App
+        
+    - name: Log successful deployment
+      if: success()
       run: |
-        az containerapp update \
-          --name slack-mcp-server \
-          --resource-group Caitlyn_res \
-          --image caitlynregistry.azurecr.io/slack-mcp-server:latest
+        echo "✅ Deployment successful at $(date -u)" >> deployment-log.txt
+        cat deployment-log.txt
+    - name: Upload deployment log
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: deployment-log
+        path: deployment-log.txt
+     
