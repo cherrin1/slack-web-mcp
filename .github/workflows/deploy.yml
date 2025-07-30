@@ -31,4 +31,18 @@ jobs:
         context: .
         push: true
         tags: caitlynregistry.azurecr.io/slack-mcp-server:latest
+        
+    - name: Log successful deployment
+      if: success()
+      run: |
+        echo "✅ Deployment successful at $(date -u)" >> deployment-log.txt
+        cat deployment-log.txt
+
+    - name: Upload deployment log
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: deployment-log
+        path: deployment-log.txt
+     
        
