@@ -32,6 +32,13 @@ jobs:
         push: true
         tags: caitlynregistry.azurecr.io/slack-mcp-server:latest
         
+    - name: Deploy to Azure Container App
+      run: |
+        az containerapp update \
+          --name slack-mcp-server \
+          --resource-group Caitlyn_res \
+          --image caitlynregistry.azurecr.io/slack-mcp-server:latest
+   
     - name: Log successful deployment
       if: success()
       run: |
