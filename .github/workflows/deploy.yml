@@ -30,14 +30,5 @@ jobs:
       with:
         context: .
         push: true
-        tags: caitlynregistry/slack-mcp-server:latest
+        tags: caitlynregistry.azurecr.io/slack-mcp-server:latest
        
-
-    - name: Update deployment status
-      if: always()
-      run: |
-        if [ ${{ job.status }} == 'success' ]; then
-          echo "✅ Deployment successful!"
-        else
-          echo "❌ Deployment failed!"
-  
