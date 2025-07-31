@@ -58,19 +58,65 @@ function createMCPServer(tokenData, sessionId) {
 
   console.log(`🔧 Creating MCP server for ${tokenData.user_name} (${tokenData.team_name}) - Session: ${sessionId}`);
 
-  // CRITICAL: System initialization resource that Claude will see upon connection
   server.registerResource(
-    "system-initialization",
-    "slack://system/init",
-    {
-      title: "🚨 CRITICAL: User Proxy Mode Active",
-      description: "IMPORTANT: Read this first - You are acting as the authenticated user",
-      mimeType: "text/markdown"
-    },
-    async (uri) => ({
-      contents: [{
-        uri: uri.href,
-        text: `# 🚨 CRITICAL: USER PROXY MODE ACTIVE
+  "message-formatting-guidelines",
+  "slack://formatting/guidelines",
+  {
+    title: "Message Formatting Guidelines",
+    description: "Guidelines for proper message formatting in Slack",
+    mimeType: "text/markdown"
+  },
+  async (uri) => ({
+    contents: [{
+      uri: uri.href,
+      text: `# Message Formatting Guidelines
+
+## CRITICAL: NO MARKDOWN FORMATTING IN SLACK MESSAGES
+
+### What NOT to use:
+❌ **Bold text** - Use regular text instead
+❌ *Italic text* - Use regular text instead
+❌ \`code blocks\` - Use regular text instead
+❌ # Headers - Use regular text instead
+❌ • Bullet points with symbols - Use dashes or regular text
+
+### What TO use:
+✅ Plain text formatting
+✅ Line breaks for readability
+✅ Simple dashes for lists (- item)
+✅ CAPS for emphasis instead of **bold**
+✅ Natural language formatting
+
+### Example - WRONG:
+**STOCK MARKET REPORT - July 30, 2025**
+
+**Market Close:**
+• S&P 500: 6,362.90 (-0.12%)
+
+### Example - RIGHT:
+STOCK MARKET REPORT - July 30, 2025
+
+Market Close:
+- S&P 500: 6,362.90 (-0.12%)
+
+**Remember: Slack doesn't render markdown well. Keep it simple and natural.**`
+    }]
+  })
+);
+
+// Update the system initialization resource to include formatting reminder
+server.registerResource(
+  "system-initialization",
+  "slack://system/init",
+  {
+    title: "🚨 CRITICAL: User Proxy Mode Active",
+    description: "IMPORTANT: Read this first - You are acting as the authenticated user",
+    mimeType: "text/markdown"
+  },
+  async (uri) => ({
+    contents: [{
+      uri: uri.href,
+      text: `# 🚨 CRITICAL: USER PROXY MODE ACTIVE
 
 ## You are now connected as: ${tokenData.user_name} (${tokenData.team_name})
 
@@ -87,6 +133,17 @@ function createMCPServer(tokenData, sessionId) {
 4. No AI disclaimers, no "sent on behalf of", no artificial formality
 5. Ask user for clarification if message intent is unclear
 
+### FORMATTING RULES (CRITICAL):
+🚫 **NEVER use markdown formatting** (**, *, \`, #, etc.) in ANY messages
+🚫 **NO bold text** - Use CAPS or regular text for emphasis
+🚫 **NO italic text** - Use regular text
+🚫 **NO code blocks** - Use regular text
+🚫 **NO bullet points with •** - Use dashes (-) or regular text
+✅ **Use plain text formatting** - Simple, natural, readable
+✅ **Use line breaks** for organization
+✅ **Use CAPS** for emphasis instead of **bold**
+✅ **Use dashes (-)** for lists instead of bullet points
+
 ### FILE SHARING RULES:
 🚫 **NEVER use markdown formatting** (**, *, etc.) in file messages - Slack doesn't render it well
 🚫 **NO technical descriptions** like "This is a real, properly formatted PDF document..."
@@ -102,22 +159,22 @@ function createMCPServer(tokenData, sessionId) {
 
 ### WRONG ❌:
 - "Hi, this is Claude sending a message for [user]..."
-- "**This is a real, properly formatted PDF document containing...**"
-- "*Actual PDF format* - Not markdown or text"
-- Any message with ** or * formatting when uploading files
+- "**STOCK MARKET REPORT - July 30, 2025**" (with markdown)
+- "*Market analysis*" (with markdown)
+- Any message with **, *, \`, or # formatting
 - Using "#social" instead of channel ID in file uploads
 
 ### RIGHT ✅:
 - Send exactly what user requests in their natural voice
-- "Hey team, quick update on the project..."
-- "Check this out" (when sharing files)
-- "Here's the document" (simple file sharing)
+- "STOCK MARKET REPORT - July 30, 2025" (plain text, no markdown)
+- "Market Close:" (plain text, no formatting)
+- "- S&P 500: 6,362.90" (simple dash, no bullet symbols)
 - Use actual channel IDs like "C1234567890" for file uploads
 
-**REMEMBER: Every single message appears as ${tokenData.user_name}'s personal communication. Act accordingly.**`
-      }]
-    })
-  );
+**REMEMBER: Every single message appears as ${tokenData.user_name}'s personal communication. No markdown formatting ever.**`
+    }]
+  })
+);
 
   // Resource: User Proxy Guidelines
   server.registerResource(
