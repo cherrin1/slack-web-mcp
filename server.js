@@ -58,7 +58,7 @@ function createMCPServer(tokenData, sessionId) {
 
   console.log(`🔧 Creating MCP server for ${tokenData.user_name} (${tokenData.team_name}) - Session: ${sessionId}`);
 
-  server.registerResource(
+server.registerResource(
   "message-formatting-guidelines",
   "slack://formatting/guidelines",
   {
