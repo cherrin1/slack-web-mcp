@@ -135,209 +135,122 @@ export function registerSlackTools(server, tokenData, sessionId) {
     }
   );
 
- server.registerTool(
-  "slack_get_messages",
-  {
-    title: "Get Messages",
-    description: "Get recent messages from a channel or DM conversation. For DMs with users, use exact user ID from search_users tool first.",
-    inputSchema: {
-      channel: z.string().describe("Channel name (#general), exact user ID (U1234567 from search_users), or channel ID"),
-      limit: z.number().optional().describe("Number of messages to retrieve (max 50)").default(10)
-    }
-  },
-  async ({ channel, limit = 10 }) => {
-    try {
-      const slack = new WebClient(tokenData.access_token);
-      let targetChannel = channel;
-      let targetName = channel;
-      
-      console.log(`🔍 Input channel: "${channel}"`);
-      
-      // Check if this looks like a user reference that needs search_users first
-      const needsUserSearch = (
-        // Starts with @ but isn't a user ID
-        (channel.startsWith('@') && !channel.match(/^@?U[A-Z0-9]+$/)) ||
-        // Doesn't start with #, C, D, or U (not a proper ID) AND doesn't look like a plain channel name
-        (!channel.startsWith('#') && !channel.startsWith('C') && !channel.startsWith('D') && !channel.startsWith('U') && !channel.includes('.slack.com') && channel.includes(' '))
-      );
-      
-      if (needsUserSearch) {
-        return {
-          content: [{
-            type: "text",
-            text: `❌ To get DM messages with specific users, please:\n\n1. First use **search_users** tool to find the exact user\n2. Then use this tool with the user ID: \`U1234567\`\n\nExample:\n• Instead of: "${channel}"\n• Use: "U1234567" (exact user ID from search results)\n\nThis ensures we open the DM with the correct person, especially when multiple users have similar names.`
-          }],
-          isError: true
-        };
+  // Tool 2: Get messages (works for both channels and DMs)
+  server.registerTool(
+    "slack_get_messages",
+    {
+      title: "Get Messages",
+      description: "Get recent messages from a channel or DM conversation. For DMs with users, use exact user ID from search_users tool first.",
+      inputSchema: {
+        channel: z.string().describe("Channel name (#general), exact user ID (U1234567 from search_users), or channel ID"),
+        limit: z.number().optional().describe("Number of messages to retrieve (max 50)").default(10)
       }
-      
-      // Handle different channel input formats
-      if (channel.match(/^@?U[A-Z0-9]+$/)) {
-        // User ID - convert to DM channel
-        const userId = channel.replace('@', '');
-        console.log(`🔍 Resolving user ID: ${userId}`);
-        try {
-          const userInfo = await slack.users.info({ user: userId });
-          const userName = userInfo.user.real_name || userInfo.user.name;
-          
-          const dmResult = await slack.conversations.open({ users: userId });
-          targetChannel = dmResult.channel.id;
-          targetName = `DM with ${userName}`;
-          console.log(`✅ Resolved to DM channel: ${targetChannel}`);
-        } catch (e) {
-          console.error(`❌ User resolution failed:`, e.message);
+    },
+    async ({ channel, limit = 10 }) => {
+      try {
+        const slack = new WebClient(tokenData.access_token);
+        let targetChannel = channel;
+        let targetName = channel;
+        
+        // Check if this looks like a user reference that needs search_users first
+        const needsUserSearch = (
+          // Starts with @ but isn't a user ID
+          (channel.startsWith('@') && !channel.match(/^@?U[A-Z0-9]+$/)) ||
+          // Doesn't start with #, C, D, or U (not a proper ID)
+          (!channel.startsWith('#') && !channel.startsWith('C') && !channel.startsWith('D') && !channel.startsWith('U') && !channel.includes('.slack.com'))
+        );
+        
+        if (needsUserSearch) {
           return {
             content: [{
               type: "text",
-              text: `❌ Invalid user ID: ${channel}. Please use search_users to find the correct user ID.`
+              text: `❌ To get DM messages with specific users, please:\n\n1. First use **search_users** tool to find the exact user\n2. Then use this tool with the user ID: \`U1234567\`\n\nExample:\n• Instead of: "${channel}"\n• Use: "U1234567" (exact user ID from search results)\n\nThis ensures we open the DM with the correct person, especially when multiple users have similar names.`
             }],
             isError: true
           };
         }
-      } else if (channel.startsWith('#')) {
-        // Channel name with # - remove the # and try to resolve to channel ID
-        const channelName = channel.substring(1);
-        console.log(`🔍 Looking up channel name: ${channelName}`);
         
-        try {
-          // Try to find the channel by name to get its ID
-          let cursor = null;
-          let foundChannel = null;
-          
-          do {
-            const params = { types: "public_channel,private_channel", limit: 200 };
-            if (cursor) params.cursor = cursor;
+        // Handle user IDs - convert to DM channel
+        if (channel.match(/^@?U[A-Z0-9]+$/)) {
+          const userId = channel.replace('@', '');
+          try {
+            // Get user info for display name
+            const userInfo = await slack.users.info({ user: userId });
+            const userName = userInfo.user.real_name || userInfo.user.name;
             
-            const channels = await slack.conversations.list(params);
-            foundChannel = channels.channels.find(ch => ch.name === channelName);
-            cursor = channels.response_metadata?.next_cursor;
-          } while (cursor && !foundChannel);
-          
-          if (foundChannel) {
-            targetChannel = foundChannel.id;
-            targetName = `#${foundChannel.name}`;
-            console.log(`✅ Resolved channel name to ID: ${targetChannel}`);
-          } else {
-            // If not found by name, try using the name directly (sometimes works)
-            targetChannel = channelName;
-            targetName = channel;
-            console.log(`⚠️ Channel not found in list, trying name directly: ${channelName}`);
+            const dmResult = await slack.conversations.open({ users: userId });
+            targetChannel = dmResult.channel.id;
+            targetName = `DM with ${userName}`;
+          } catch (e) {
+            return {
+              content: [{
+                type: "text",
+                text: `❌ Invalid user ID: ${channel}. Please use search_users to find the correct user ID.`
+              }],
+              isError: true
+            };
           }
-        } catch (e) {
-          console.error(`❌ Channel lookup failed:`, e.message);
-          // Fall back to using the channel name directly
-          targetChannel = channelName;
+        } else if (channel.startsWith('#')) {
+          targetChannel = channel.substring(1);
           targetName = channel;
         }
-      } else if (channel.match(/^[CD][A-Z0-9]+$/)) {
-        // Already a channel or DM ID - use as-is
-        targetChannel = channel;
-        targetName = `Channel ${channel}`;
-        console.log(`✅ Using channel/DM ID directly: ${targetChannel}`);
-      } else {
-        // Plain channel name without # - try to resolve it
-        console.log(`🔍 Plain channel name: ${channel}`);
+        // For channel IDs (C..., D...), use as-is
         
-        try {
-          // Try to find the channel by name to get its ID
-          let cursor = null;
-          let foundChannel = null;
-          
-          do {
-            const params = { types: "public_channel,private_channel", limit: 200 };
-            if (cursor) params.cursor = cursor;
-            
-            const channels = await slack.conversations.list(params);
-            foundChannel = channels.channels.find(ch => ch.name === channel);
-            cursor = channels.response_metadata?.next_cursor;
-          } while (cursor && !foundChannel);
-          
-          if (foundChannel) {
-            targetChannel = foundChannel.id;
-            targetName = `#${foundChannel.name}`;
-            console.log(`✅ Resolved plain name to ID: ${targetChannel}`);
-          } else {
-            // Try using the name directly as fallback
-            targetChannel = channel;
-            targetName = `#${channel}`;
-            console.log(`⚠️ Channel not found in list, trying plain name: ${channel}`);
-          }
-        } catch (e) {
-          console.error(`❌ Channel lookup failed:`, e.message);
-          targetChannel = channel;
-          targetName = `#${channel}`;
+        const messages = await slack.conversations.history({
+          channel: targetChannel,
+          limit: Math.min(limit, 50)
+        });
+        
+        if (!messages.messages || messages.messages.length === 0) {
+          return {
+            content: [{
+              type: "text",
+              text: `💬 No messages found in ${targetName}`
+            }]
+          };
         }
-      }
-      
-      console.log(`🎯 Final target: channel="${targetChannel}", name="${targetName}"`);
-      
-      // Get messages
-      const messages = await slack.conversations.history({
-        channel: targetChannel,
-        limit: Math.min(limit, 50)
-      });
-      
-      if (!messages.messages || messages.messages.length === 0) {
+        
+        // Build user cache for efficient name lookups
+        const userCache = new Map();
+        const uniqueUserIds = [...new Set(messages.messages.map(m => m.user).filter(Boolean))];
+        
+        await Promise.all(uniqueUserIds.map(async (userId) => {
+          try {
+            const userInfo = await slack.users.info({ user: userId });
+            userCache.set(userId, userInfo.user.real_name || userInfo.user.name);
+          } catch (e) {
+            userCache.set(userId, userId);
+          }
+        }));
+        
+        const messageList = messages.messages
+          .slice(0, limit)
+          .map((msg) => {
+            const timestamp = new Date(parseInt(msg.ts) * 1000).toLocaleString();
+            const userName = userCache.get(msg.user) || msg.user || 'Unknown';
+            const isMe = msg.user === tokenData.user_id ? ' (You)' : '';
+            return `[${timestamp}] ${userName}${isMe}: ${msg.text || '(no text)'}`;
+          });
+        
         return {
           content: [{
             type: "text",
-            text: `💬 No messages found in ${targetName}`
+            text: `💬 Recent messages from ${targetName}:\n\n${messageList.join('\n')}\n\n*Retrieved ${messageList.length} messages*`
           }]
         };
+      } catch (error) {
+        console.error(`❌ Get messages failed:`, error.message);
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Failed to get messages: ${error.message}`
+          }],
+          isError: true
+        };
       }
-      
-      // Build user cache for efficient name lookups
-      const userCache = new Map();
-      const uniqueUserIds = [...new Set(messages.messages.map(m => m.user).filter(Boolean))];
-      
-      await Promise.all(uniqueUserIds.map(async (userId) => {
-        try {
-          const userInfo = await slack.users.info({ user: userId });
-          userCache.set(userId, userInfo.user.real_name || userInfo.user.name);
-        } catch (e) {
-          userCache.set(userId, userId);
-        }
-      }));
-      
-      const messageList = messages.messages
-        .slice(0, limit)
-        .map((msg) => {
-          const timestamp = new Date(parseInt(msg.ts) * 1000).toLocaleString();
-          const userName = userCache.get(msg.user) || msg.user || 'Unknown';
-          const isMe = msg.user === tokenData.user_id ? ' (You)' : '';
-          return `[${timestamp}] ${userName}${isMe}: ${msg.text || '(no text)'}`;
-        });
-      
-      return {
-        content: [{
-          type: "text",
-          text: `💬 Recent messages from ${targetName}:\n\n${messageList.join('\n')}\n\n*Retrieved ${messageList.length} messages*`
-        }]
-      };
-    } catch (error) {
-      console.error(`❌ Get messages failed:`, error.message);
-      
-      // Provide more specific error information
-      let errorMsg = `❌ Failed to get messages: ${error.message}`;
-      
-      if (error.message.includes('channel_not_found')) {
-        errorMsg += `\n\n**Troubleshooting:**\n• Check if the channel name is correct\n• Make sure you have access to this channel\n• Try using the channel ID instead of name\n• For private channels, ensure you're a member`;
-      } else if (error.message.includes('not_in_channel')) {
-        errorMsg += `\n\n**Issue:** You're not a member of this channel. Ask an admin to invite you first.`;
-      } else if (error.message.includes('invalid_auth')) {
-        errorMsg += `\n\n**Issue:** Authentication problem. The bot may need to be re-authorized.`;
-      }
-      
-      return {
-        content: [{
-          type: "text",
-          text: errorMsg
-        }],
-        isError: true
-      };
     }
-  }
-);
+  );
+
   // Tool 3: Search messages
   server.registerTool(
     "slack_search_messages",
