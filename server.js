@@ -671,9 +671,9 @@ server.registerTool(
   "slack_add_reaction",
   {
     title: "Add Reaction to Message",
-    description: "Add an emoji reaction to a Slack message",
+    description: "Add an emoji reaction to a Slack message in channels or DMs",
     inputSchema: {
-      channel: z.string().describe("Channel ID or name where the message is located"),
+      channel: z.string().describe("Channel ID, channel name (#channel), user ID (U123...), or username (@user) for DMs"),
       timestamp: z.string().describe("Message timestamp (from message history or search results)"),
       name: z.string().describe("Emoji name without colons (e.g., 'thumbsup', 'heart', 'fire', 'tada')")
     }
@@ -682,9 +682,49 @@ server.registerTool(
     try {
       const slack = new WebClient(tokenData.access_token);
       
+      // Handle different channel formats
+      let channelId = channel;
+      
+      // If it's a username (@user), convert to DM channel
+      if (channel.startsWith('@')) {
+        const username = channel.substring(1);
+        try {
+          // Get user info by username
+          const userInfo = await slack.users.info({ user: username });
+          if (userInfo.user) {
+            // Open DM channel with the user
+            const dmResult = await slack.conversations.open({
+              users: userInfo.user.id
+            });
+            channelId = dmResult.channel.id;
+          }
+        } catch (e) {
+          // If username lookup fails, try as user ID
+          try {
+            const dmResult = await slack.conversations.open({
+              users: username
+            });
+            channelId = dmResult.channel.id;
+          } catch (e2) {
+            throw new Error(`Could not find user or open DM with: ${channel}`);
+          }
+        }
+      }
+      // If it's a user ID (starts with U), open DM
+      else if (channel.match(/^U[A-Z0-9]+$/)) {
+        const dmResult = await slack.conversations.open({
+          users: channel
+        });
+        channelId = dmResult.channel.id;
+      }
+      // If it's a channel name, remove # prefix
+      else if (channel.startsWith('#')) {
+        channelId = channel.substring(1);
+      }
+      
       // Add reaction to the message
       await slack.reactions.add({
-        channel: channel.replace('#', ''),
+        channel: channelId,
         timestamp: timestamp,
         name: name.replace(/:/g, '') // Remove colons if user included them
       });
@@ -694,7 +734,7 @@ server.registerTool(
       return {
         content: [{
           type: "text",
-          text: `✅ Added :${name}: reaction to message!\n\nChannel: ${channel}\nMessage timestamp: ${timestamp}\nReaction: :${name}:\nAdded by: ${tokenData.user_name}`
+          text: `✅ Added :${name}: reaction to message!\n\nChannel/DM: ${channel}\nMessage timestamp: ${timestamp}\nReaction: :${name}:\nAdded by: ${tokenData.user_name}`
         }]
       };
     } catch (error) {
@@ -702,7 +742,7 @@ server.registerTool(
       return {
         content: [{
           type: "text",
-          text: `❌ Failed to add reaction: ${error.message}\n\nTip: Make sure the message timestamp is correct and you have permission to react in this channel.`
+          text: `❌ Failed to add reaction: ${error.message}\n\nTip: Make sure the message timestamp is correct and you have permission to react in this channel/DM.`
         }],
         isError: true
       };
@@ -715,9 +755,9 @@ server.registerTool(
   "slack_remove_reaction",
   {
     title: "Remove Reaction from Message", 
-    description: "Remove an emoji reaction from a Slack message",
+    description: "Remove an emoji reaction from a Slack message in channels or DMs",
     inputSchema: {
-      channel: z.string().describe("Channel ID or name where the message is located"),
+      channel: z.string().describe("Channel ID, channel name (#channel), user ID (U123...), or username (@user) for DMs"),
       timestamp: z.string().describe("Message timestamp"),
       name: z.string().describe("Emoji name without colons (e.g., 'thumbsup', 'heart', 'fire')")
     }
@@ -726,9 +766,43 @@ server.registerTool(
     try {
       const slack = new WebClient(tokenData.access_token);
       
+      // Handle different channel formats (same logic as add_reaction)
+      let channelId = channel;
+      
+      if (channel.startsWith('@')) {
+        const username = channel.substring(1);
+        try {
+          const userInfo = await slack.users.info({ user: username });
+          if (userInfo.user) {
+            const dmResult = await slack.conversations.open({
+              users: userInfo.user.id
+            });
+            channelId = dmResult.channel.id;
+          }
+        } catch (e) {
+          try {
+            const dmResult = await slack.conversations.open({
+              users: username
+            });
+            channelId = dmResult.channel.id;
+          } catch (e2) {
+            throw new Error(`Could not find user or open DM with: ${channel}`);
+          }
+        }
+      }
+      else if (channel.match(/^U[A-Z0-9]+$/)) {
+        const dmResult = await slack.conversations.open({
+          users: channel
+        });
+        channelId = dmResult.channel.id;
+      }
+      else if (channel.startsWith('#')) {
+        channelId = channel.substring(1);
+      }
+      
       // Remove reaction from the message
       await slack.reactions.remove({
-        channel: channel.replace('#', ''),
+        channel: channelId,
         timestamp: timestamp,
         name: name.replace(/:/g, '')
       });
@@ -738,7 +812,7 @@ server.registerTool(
       return {
         content: [{
           type: "text",
-          text: `✅ Removed :${name}: reaction from message!\n\nChannel: ${channel}\nMessage timestamp: ${timestamp}\nReaction removed: :${name}:\nRemoved by: ${tokenData.user_name}`
+          text: `✅ Removed :${name}: reaction from message!\n\nChannel/DM: ${channel}\nMessage timestamp: ${timestamp}\nReaction removed: :${name}:\nRemoved by: ${tokenData.user_name}`
         }]
       };
     } catch (error) {
@@ -759,9 +833,9 @@ server.registerTool(
   "slack_get_reactions",
   {
     title: "Get Message Reactions",
-    description: "Get all reactions on a specific Slack message",
+    description: "Get all reactions on a specific Slack message in channels or DMs",
     inputSchema: {
-      channel: z.string().describe("Channel ID or name where the message is located"),
+      channel: z.string().describe("Channel ID, channel name (#channel), user ID (U123...), or username (@user) for DMs"),
       timestamp: z.string().describe("Message timestamp")
     }
   },
@@ -769,9 +843,43 @@ server.registerTool(
     try {
       const slack = new WebClient(tokenData.access_token);
       
+      // Handle different channel formats (same logic as add_reaction)
+      let channelId = channel;
+      
+      if (channel.startsWith('@')) {
+        const username = channel.substring(1);
+        try {
+          const userInfo = await slack.users.info({ user: username });
+          if (userInfo.user) {
+            const dmResult = await slack.conversations.open({
+              users: userInfo.user.id
+            });
+            channelId = dmResult.channel.id;
+          }
+        } catch (e) {
+          try {
+            const dmResult = await slack.conversations.open({
+              users: username
+            });
+            channelId = dmResult.channel.id;
+          } catch (e2) {
+            throw new Error(`Could not find user or open DM with: ${channel}`);
+          }
+        }
+      }
+      else if (channel.match(/^U[A-Z0-9]+$/)) {
+        const dmResult = await slack.conversations.open({
+          users: channel
+        });
+        channelId = dmResult.channel.id;
+      }
+      else if (channel.startsWith('#')) {
+        channelId = channel.substring(1);
+      }
+      
       // Get message with reactions
       const result = await slack.conversations.history({
-        channel: channel.replace('#', ''),
+        channel: channelId,
         latest: timestamp,
         oldest: timestamp,
         inclusive: true,
@@ -826,14 +934,14 @@ server.registerTool(
   }
 );
 
-// Tool: React to latest message in channel
+// Tool: React to latest message in channel or DM
 server.registerTool(
   "slack_react_to_latest",
   {
     title: "React to Latest Message",
-    description: "Add a reaction to the most recent message in a channel",
+    description: "Add a reaction to the most recent message in a channel or DM",
     inputSchema: {
-      channel: z.string().describe("Channel ID or name"),
+      channel: z.string().describe("Channel ID, channel name (#channel), user ID (U123...), or username (@user) for DMs"),
       name: z.string().describe("Emoji name without colons (e.g., 'thumbsup', 'heart', 'fire', 'tada')"),
       exclude_self: z.boolean().optional().describe("Skip your own messages").default(true)
     }
@@ -842,9 +950,46 @@ server.registerTool(
     try {
       const slack = new WebClient(tokenData.access_token);
       
+      // Handle different channel formats (same logic as add_reaction)
+      let channelId = channel;
+      let isDM = false;
+      
+      if (channel.startsWith('@')) {
+        const username = channel.substring(1);
+        isDM = true;
+        try {
+          const userInfo = await slack.users.info({ user: username });
+          if (userInfo.user) {
+            const dmResult = await slack.conversations.open({
+              users: userInfo.user.id
+            });
+            channelId = dmResult.channel.id;
+          }
+        } catch (e) {
+          try {
+            const dmResult = await slack.conversations.open({
+              users: username
+            });
+            channelId = dmResult.channel.id;
+          } catch (e2) {
+            throw new Error(`Could not find user or open DM with: ${channel}`);
+          }
+        }
+      }
+      else if (channel.match(/^U[A-Z0-9]+$/)) {
+        isDM = true;
+        const dmResult = await slack.conversations.open({
+          users: channel
+        });
+        channelId = dmResult.channel.id;
+      }
+      else if (channel.startsWith('#')) {
+        channelId = channel.substring(1);
+      }
+      
       // Get recent messages
       const messages = await slack.conversations.history({
-        channel: channel.replace('#', ''),
+        channel: channelId,
         limit: 10
       });
       
@@ -880,7 +1025,7 @@ server.registerTool(
       
       // Add reaction to the message
       await slack.reactions.add({
-        channel: channel.replace('#', ''),
+        channel: channelId,
         timestamp: targetMessage.ts,
         name: name.replace(/:/g, '')
       });
@@ -896,10 +1041,12 @@ server.registerTool(
         // Keep original user ID if lookup fails
       }
       
+      const conversationType = isDM ? "DM" : "Channel";
+      
       return {
         content: [{
           type: "text",
-          text: `✅ Added :${name}: reaction to latest message!\n\nChannel: ${channel}\nMessage author: ${authorName}\nMessage preview: "${(targetMessage.text || '').substring(0, 100)}${targetMessage.text && targetMessage.text.length > 100 ? '...' : ''}"\nReaction: :${name}:\nAdded by: ${tokenData.user_name}`
+          text: `✅ Added :${name}: reaction to latest message!\n\n${conversationType}: ${channel}\nMessage author: ${authorName}\nMessage preview: "${(targetMessage.text || '').substring(0, 100)}${targetMessage.text && targetMessage.text.length > 100 ? '...' : ''}"\nReaction: :${name}:\nAdded by: ${tokenData.user_name}`
         }]
       };
     } catch (error) {
@@ -907,7 +1054,7 @@ server.registerTool(
       return {
         content: [{
           type: "text",
-          text: `❌ Failed to react to latest message: ${error.message}`
+          text: `❌ Failed to react to latest message: ${error.message}\n\nTip: For DMs, make sure the user exists and you have permission to message them.`
         }],
         isError: true
       };
@@ -915,7 +1062,6 @@ server.registerTool(
   }
 );
   // Add these tools to your createMCPServer function, after the existing tools
-
 // Tool: List files in workspace
 server.registerTool(
   "slack_list_files",
