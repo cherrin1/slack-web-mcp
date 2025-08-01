@@ -445,7 +445,7 @@ export function registerSlackTools(server, tokenData, sessionId) {
     "slack_search_users",
     {
       title: "Search Users",
-      description: "Find users by name, username, or email",
+      description: "Find users by name, username, or email. Returns user IDs needed for other tools.",
       inputSchema: {
         search: z.string().describe("Search term (name, username, or email)"),
         limit: z.number().optional().describe("Maximum results").default(10)
@@ -504,13 +504,14 @@ export function registerSlackTools(server, tokenData, sessionId) {
           const status = user.presence === 'active' ? '🟢' : '⚪';
           const realName = user.real_name || user.name;
           const email = user.profile?.email ? ` • ${user.profile.email}` : '';
-          return `${status} ${realName} (@${user.name})${email}`;
-        }).join('\n');
+          // Prominently display the user ID that other tools need
+          return `${status} **${realName}** (@${user.name})${email}\n   **User ID:** \`${user.id}\``;
+        }).join('\n\n');
         
         return {
           content: [{
             type: "text",
-            text: `🔍 Users matching "${search}":\n\n${userList}\n\n*${matches.length} results • 🟢=Active ⚪=Away*`
+            text: `🔍 Users matching "${search}":\n\n${userList}\n\n*${matches.length} results • 🟢=Active ⚪=Away*\n\n**Use the User ID (e.g., \`${matches[0].user.id}\`) with other tools for DMs and message searches.**`
           }]
         };
       } catch (error) {
