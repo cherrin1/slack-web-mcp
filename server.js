@@ -323,7 +323,12 @@ app.get('/oauth/callback', async (req, res) => {
     };
     
     userTokens.set(tokenKey, tokenData);
-    console.log(`✅ Slack token stored for user: ${tokenData.user_name} (${tokenKey})`);
+    const maskedTokenKey = tokenKey.length > 12 
+      ? `${tokenKey.substring(0, 8)}...${tokenKey.substring(tokenKey.length - 4)}`
+      : `${tokenKey.substring(0, 4)}****`;
+
+    console.log(`✅ Slack token stored for user: ${tokenData.user_name} (${maskedTokenKey})`);
+    
     
     // Check if this was initiated from Claude
     const authSession = userTokens.get(state);
