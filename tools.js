@@ -666,7 +666,121 @@ export function registerSlackTools(server, tokenData, sessionId) {
       }
     }
   );
-
+// Tool: React to latest message in channel or DM
+  server.registerTool(
+    "slack_react_to_latest",
+    {
+      title: "React to Latest Message",
+      description: "Add a reaction to the most recent message in a channel or DM",
+      inputSchema: {
+        channel: z.string().describe("Channel ID, channel name (#channel), user ID (U123...), or username (@user) for DMs"),
+        name: z.string().describe("Emoji name without colons (e.g., 'thumbsup', 'heart', 'fire', 'tada')"),
+        exclude_self: z.boolean().optional().describe("Skip your own messages").default(true)
+      }
+    },
+    async ({ channel, name, exclude_self = true }) => {
+      try {
+        const slack = new WebClient(tokenData.access_token);
+        
+        let channelId = channel;
+        let resolvedTarget = channel;
+        let isDM = false;
+        
+        // Handle different channel formats (same logic as add_reaction)
+        if (channel.startsWith('@')) {
+          const userId = await resolveUserId(slack, channel);
+          const userName = await getUserDisplayName(slack, userId);
+          isDM = true;
+          const dmResult = await slack.conversations.open({ users: userId });
+          channelId = dmResult.channel.id;
+          resolvedTarget = `DM with ${userName}`;
+        }
+        else if (channel.match(/^U[A-Z0-9]+$/)) {
+          const userName = await getUserDisplayName(slack, channel);
+          isDM = true;
+          const dmResult = await slack.conversations.open({ users: channel });
+          channelId = dmResult.channel.id;
+          resolvedTarget = `DM with ${userName}`;
+        }
+        else if (channel.startsWith('#')) {
+          channelId = channel.substring(1);
+          resolvedTarget = channel;
+        }
+        
+        // Get recent messages
+        const messages = await slack.conversations.history({
+          channel: channelId,
+          limit: 10
+        });
+        
+        if (!messages.messages || messages.messages.length === 0) {
+          return {
+            content: [{
+              type: "text",
+              text: `❌ No messages found in ${resolvedTarget}`
+            }],
+            isError: true
+          };
+        }
+        
+        // Find the latest message (optionally excluding own messages)
+        let targetMessage = null;
+        for (const msg of messages.messages) {
+          if (exclude_self && msg.user === tokenData.user_id) {
+            continue; // Skip own messages
+          }
+          targetMessage = msg;
+          break;
+        }
+        
+        if (!targetMessage) {
+          return {
+            content: [{
+              type: "text",
+              text: `❌ No suitable message found in ${resolvedTarget} (excluding your own messages)`
+            }],
+            isError: true
+          };
+        }
+        
+        // Add reaction to the message
+        await slack.reactions.add({
+          channel: channelId,
+          timestamp: targetMessage.ts,
+          name: name.replace(/:/g, '')
+        });
+        
+        console.log(`👍 Reaction :${name}: added by ${tokenData.user_name} to latest message in ${resolvedTarget}`);
+        
+        // Get user name for the message author
+        let authorName = targetMessage.user;
+        try {
+          const userInfo = await slack.users.info({ user: targetMessage.user });
+          authorName = userInfo.user.real_name || userInfo.user.name;
+        } catch (e) {
+          // Keep original user ID if lookup fails
+        }
+        
+        const conversationType = isDM ? "DM" : "Channel";
+        
+        return {
+          content: [{
+            type: "text",
+            text: `✅ Added :${name}: reaction to latest message!\n\n${conversationType}: ${resolvedTarget}\nMessage author: ${authorName}\nMessage preview: "${(targetMessage.text || '').substring(0, 100)}${targetMessage.text && targetMessage.text.length > 100 ? '...' : ''}"\nReaction: :${name}:\nAdded by: ${tokenData.user_name}`
+          }]
+        };
+      } catch (error) {
+        console.error(`❌ React to latest failed for ${tokenData.user_name}:`, error.message);
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Failed to react to latest message: ${error.message}\n\nTip: For DMs, make sure the user exists and you have permission to message them.`
+          }],
+          isError: true
+        };
+      }
+    }
+  );
   // Tool 7: List files
   server.registerTool(
     "slack_list_files",
