@@ -348,7 +348,7 @@ export function registerSlackTools(server, tokenData, sessionId) {
     "slack_search_user_messages",
     {
       title: "Search User Messages",
-      description: "Search for messages sent BY a specific user. Use search_users first to get the user ID.",
+      description: "Search for messages sent BY a specific user. Use search_users first to get the username.",
       inputSchema: {
         user_id: z.string().describe("User ID from search_users tool (e.g., U1234567)"),
         query: z.string().optional().describe("Optional: search within that user's messages").default(""),
@@ -371,11 +371,13 @@ export function registerSlackTools(server, tokenData, sessionId) {
           };
         }
         
-        // Get user info for display
+        // Get user info for display name and username
         let userName = user_id;
+        let username = user_id;
         try {
           const userInfo = await slack.users.info({ user: user_id });
           userName = userInfo.user.real_name || userInfo.user.name;
+          username = userInfo.user.name; // This is the @username we need
         } catch (e) {
           return {
             content: [{
@@ -386,8 +388,8 @@ export function registerSlackTools(server, tokenData, sessionId) {
           };
         }
         
-        // Build search query
-        let searchQuery = `from:${user_id}`;
+        // Build search query using @username (more reliable than user ID)
+        let searchQuery = `from:@${username}`;
         if (query.trim()) {
           searchQuery += ` ${query}`;
         }
@@ -429,7 +431,7 @@ export function registerSlackTools(server, tokenData, sessionId) {
           return {
             content: [{
               type: "text",
-              text: `🔍 No messages found from ${userName}${queryInfo} in ${searchLocation}`
+              text: `🔍 No messages found from ${userName} (@${username})${queryInfo} in ${searchLocation}`
             }]
           };
         }
@@ -447,7 +449,7 @@ export function registerSlackTools(server, tokenData, sessionId) {
         return {
           content: [{
             type: "text",
-            text: `💬 Messages from ${userName}${queryInfo} in ${searchLocation}:\n\n${messageList.join('\n\n')}\n\n*Found ${results.messages.total} total • Showing ${messageList.length} results*`
+            text: `💬 Messages from ${userName} (@${username})${queryInfo} in ${searchLocation}:\n\n${messageList.join('\n\n')}\n\n*Found ${results.messages.total} total • Showing ${messageList.length} results*`
           }]
         };
       } catch (error) {
