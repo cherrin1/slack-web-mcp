@@ -469,51 +469,33 @@ export function registerSlackTools(server, tokenData, sessionId) {
   server.registerTool(
     "slack_get_channels",
     {
-      title: "List Channels",
+      title: "Get Slack Channels",
       description: "Get list of channels you have access to",
       inputSchema: {
-        limit: z.number().optional().describe("Maximum channels to return").default(50),
-        include_private: z.boolean().optional().describe("Include private channels").default(true)
+        types: z.string().optional().describe("Channel types to include (public_channel,private_channel,mpim,im)").default("public_channel,private_channel")
       }
     },
-    async ({ limit = 50, include_private = true }) => {
+    async ({ types = "public_channel,private_channel" }) => {
       try {
         const slack = new WebClient(tokenData.access_token);
         
-        const types = include_private ? "public_channel,private_channel" : "public_channel";
-        let allChannels = [];
-        let cursor = null;
-        
-        do {
-          const params = { types, limit: 200 };
-          if (cursor) params.cursor = cursor;
-          
-          const channels = await slack.conversations.list(params);
-          allChannels = allChannels.concat(channels.channels || []);
-          cursor = channels.response_metadata?.next_cursor;
-        } while (cursor && allChannels.length < limit * 2);
-        
-        // Sort by member count (descending) then by name
-        allChannels.sort((a, b) => {
-          const membersA = a.num_members || 0;
-          const membersB = b.num_members || 0;
-          return membersB - membersA || (a.name || '').localeCompare(b.name || '');
+        const channels = await slack.conversations.list({
+          types: types,
+          limit: 200
         });
         
-        const channelList = allChannels
-          .slice(0, limit)
+        const channelList = channels.channels
           .map(ch => {
-            const type = ch.is_private ? '🔒' : '🌍';
-            const members = ch.num_members ? ` (${ch.num_members})` : '';
-            const archived = ch.is_archived ? ' [ARCHIVED]' : '';
-            return `${type} #${ch.name}${members}${archived}`;
+            const type = ch.is_private ? '🔒 Private' : '🌍 Public';
+            const members = ch.num_members ? ` (${ch.num_members} members)` : '';
+            return `• #${ch.name} ${type}${members} - ${ch.id}`;
           })
           .join('\n');
         
         return {
           content: [{
             type: "text",
-            text: `📋 Channels in ${tokenData.team_name} (${Math.min(limit, allChannels.length)} of ${allChannels.length}):\n\n${channelList}\n\n*🌍=Public 🔒=Private • Sorted by member count*`
+            text: `📋 Your channels in ${tokenData.team_name}:\n\n${channelList}\n\n*Connected as: ${tokenData.user_name}*`
           }]
         };
       } catch (error) {
@@ -528,7 +510,7 @@ export function registerSlackTools(server, tokenData, sessionId) {
     }
   );
 
-  // Tool 5: Search users (simplified, focused)
+  // Tool 6: Search users (simplified, focused)
   server.registerTool(
     "slack_search_users",
     {
@@ -614,59 +596,7 @@ export function registerSlackTools(server, tokenData, sessionId) {
     }
   );
 
-  // Tool 6: Add reaction
-  server.registerTool(
-    "slack_add_reaction",
-    {
-      title: "Add Reaction",
-      description: "Add emoji reaction to a message",
-      inputSchema: {
-        channel: z.string().describe("Channel name (#general), username (@john.doe), or channel/user ID"),
-        timestamp: z.string().describe("Message timestamp (from message history)"),
-        emoji: z.string().describe("Emoji name without colons (e.g., thumbsup, heart, fire)")
-      }
-    },
-    async ({ channel, timestamp, emoji }) => {
-      try {
-        const slack = new WebClient(tokenData.access_token);
-        let targetChannel = channel;
-        let targetName = channel;
-        
-        // Resolve channel/user
-        if (channel.startsWith('@') || (!channel.startsWith('#') && !channel.startsWith('C') && !channel.startsWith('D'))) {
-          const user = await resolveUser(slack, channel);
-          const dmResult = await slack.conversations.open({ users: user.id });
-          targetChannel = dmResult.channel.id;
-          targetName = `DM with ${user.name}`;
-        } else if (channel.startsWith('#')) {
-          targetChannel = channel.substring(1);
-          targetName = channel;
-        }
-        
-        await slack.reactions.add({
-          channel: targetChannel,
-          timestamp: timestamp,
-          name: emoji.replace(/:/g, '')
-        });
-        
-        return {
-          content: [{
-            type: "text",
-            text: `✅ Added :${emoji}: reaction to message in ${targetName}!`
-          }]
-        };
-      } catch (error) {
-        return {
-          content: [{
-            type: "text",
-            text: `❌ Failed to add reaction: ${error.message}`
-          }],
-          isError: true
-        };
-      }
-    }
-  );
-// Tool: React to latest message in channel or DM
+  // Tool 7: React to latest message in channel or DM
   server.registerTool(
     "slack_react_to_latest",
     {
@@ -686,26 +616,33 @@ export function registerSlackTools(server, tokenData, sessionId) {
         let resolvedTarget = channel;
         let isDM = false;
         
-        // Handle different channel formats (same logic as add_reaction)
+        // Handle different channel formats
         if (channel.startsWith('@')) {
-          const userId = await resolveUserId(slack, channel);
-          const userName = await getUserDisplayName(slack, userId);
+          // Remove @ and resolve user
+          const user = await resolveUser(slack, channel);
           isDM = true;
-          const dmResult = await slack.conversations.open({ users: userId });
+          const dmResult = await slack.conversations.open({ users: user.id });
           channelId = dmResult.channel.id;
-          resolvedTarget = `DM with ${userName}`;
+          resolvedTarget = `DM with ${user.name}`;
         }
         else if (channel.match(/^U[A-Z0-9]+$/)) {
-          const userName = await getUserDisplayName(slack, channel);
-          isDM = true;
-          const dmResult = await slack.conversations.open({ users: channel });
-          channelId = dmResult.channel.id;
-          resolvedTarget = `DM with ${userName}`;
+          // Direct user ID
+          try {
+            const userInfo = await slack.users.info({ user: channel });
+            const userName = userInfo.user.real_name || userInfo.user.name;
+            isDM = true;
+            const dmResult = await slack.conversations.open({ users: channel });
+            channelId = dmResult.channel.id;
+            resolvedTarget = `DM with ${userName}`;
+          } catch (e) {
+            throw new Error(`Invalid user ID: ${channel}`);
+          }
         }
         else if (channel.startsWith('#')) {
           channelId = channel.substring(1);
           resolvedTarget = channel;
         }
+        // Otherwise assume it's already a channel ID
         
         // Get recent messages
         const messages = await slack.conversations.history({
@@ -781,7 +718,8 @@ export function registerSlackTools(server, tokenData, sessionId) {
       }
     }
   );
-  // Tool 7: List files
+
+  // Tool 8: List files
   server.registerTool(
     "slack_list_files",
     {
@@ -869,7 +807,7 @@ export function registerSlackTools(server, tokenData, sessionId) {
     }
   );
 
-  // Tool 8: Get file content
+  // Tool 9: Get file content
   server.registerTool(
     "slack_get_file",
     {
@@ -955,7 +893,7 @@ export function registerSlackTools(server, tokenData, sessionId) {
     }
   );
 
-  // Tool 9: Search files
+  // Tool 10: Search files
   server.registerTool(
     "slack_search_files",
     {
@@ -1024,7 +962,7 @@ export function registerSlackTools(server, tokenData, sessionId) {
     }
   );
 
-  // Tool 10: Get workspace info
+  // Tool 11: Get workspace info
   server.registerTool(
     "slack_get_workspace_info",
     {
