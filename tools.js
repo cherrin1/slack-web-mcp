@@ -256,10 +256,10 @@ export function registerSlackTools(server, tokenData, sessionId) {
     "slack_search_messages",
     {
       title: "Search Messages",
-      description: "Search for messages across workspace or in specific channel/DM. For user-specific searches, use exact user ID from search_users tool first.",
+      description: "Search for messages across workspace or in specific channel/DM. For user-specific searches, use the channel parameter with user ID.",
       inputSchema: {
-        query: z.string().describe("Search keywords. For user searches, use 'from:U1234567' with exact user ID from search_users tool"),
-        channel: z.string().optional().describe("Optional: limit search to specific channel (#general) or user (@john.doe)"),
+        query: z.string().describe("Search keywords (do not include 'from:' - use channel parameter for user searches)"),
+        channel: z.string().optional().describe("Optional: limit search to specific channel (#general) or user ID (U1234567 from search_users)"),
         limit: z.number().optional().describe("Number of results (max 20)").default(10)
       }
     },
@@ -269,55 +269,59 @@ export function registerSlackTools(server, tokenData, sessionId) {
         let searchQuery = query;
         let searchLocation = "workspace";
         
-        // Check if query contains user references that need resolution
-        const userRefPatterns = [
-          /(^|\s)(from:?)\s*@?([a-zA-Z][\w\.-]*(?:\s+[a-zA-Z][\w\.-]*)*)/gi,
-          /(^|\s)(by:?)\s*@?([a-zA-Z][\w\.-]*(?:\s+[a-zA-Z][\w\.-]*)*)/gi,
-          /(^|\s)(messages?\s+from)\s+@?([a-zA-Z][\w\.-]*(?:\s+[a-zA-Z][\w\.-]*)*)/gi,
-          /(^|\s)(sent\s+by)\s+@?([a-zA-Z][\w\.-]*(?:\s+[a-zA-Z][\w\.-]*)*)/gi
-        ];
-        
-        // Check for user references that aren't already user IDs
-        let needsUserSearch = false;
-        for (const pattern of userRefPatterns) {
-          const matches = [...query.matchAll(pattern)];
-          for (const match of matches) {
-            const userIdentifier = match[3];
-            // If it's not already a user ID format (U followed by alphanumeric)
-            if (userIdentifier && !userIdentifier.match(/^U[A-Z0-9]+$/)) {
-              needsUserSearch = true;
-              break;
-            }
-          }
-          if (needsUserSearch) break;
-        }
-        
-        // If user references detected, require using search_users first
-        if (needsUserSearch) {
+        // Block from: syntax in the query
+        if (query.includes('from:')) {
           return {
             content: [{
               type: "text",
-              text: `❌ To search messages from specific users, please:\n\n1. First use **search_users** tool to find the exact user\n2. Then use this tool with the user ID format: \`from:U1234567\`\n\nExample:\n• Instead of: "from Nash" or "messages from Nash"\n• Use: "from:U1234567" (with actual user ID from search results)\n\nThis ensures we find the correct person, especially when multiple users have similar names.`
+              text: `❌ Don't use 'from:' syntax in the query. Instead:\n\n1. Use **search_users** to find the user\n2. Put the user ID in the **channel** parameter\n3. Put your search keywords in the **query** parameter\n\nExample:\n• Query: "project updates"\n• Channel: "U1234567"\n\nThis will search for "project updates" in messages from that user.`
             }],
             isError: true
           };
         }
         
-        // Add channel filter if specified
+        // Handle channel parameter for filtering
         if (channel) {
           let targetChannel = channel;
           
-          if (channel.startsWith('@') || (!channel.startsWith('#') && !channel.startsWith('C') && !channel.startsWith('D'))) {
-            const user = await resolveUser(slack, channel);
-            const dmResult = await slack.conversations.open({ users: user.id });
-            targetChannel = dmResult.channel.id;
-            searchLocation = `DM with ${user.name}`;
+          // Handle user ID - convert to DM channel for search
+          if (channel.match(/^U[A-Z0-9]+$/)) {
+            try {
+              // Get user info for display name
+              const userInfo = await slack.users.info({ user: channel });
+              const userName = userInfo.user.real_name || userInfo.user.name;
+              
+              // Open DM channel to get the channel ID for search
+              const dmResult = await slack.conversations.open({ users: channel });
+              targetChannel = dmResult.channel.id;
+              searchLocation = `DM with ${userName}`;
+            } catch (e) {
+              return {
+                content: [{
+                  type: "text",
+                  text: `❌ Invalid user ID: ${channel}. Please use search_users to find the correct user ID.`
+                }],
+                isError: true
+              };
+            }
           } else if (channel.startsWith('#')) {
             targetChannel = channel.substring(1);
             searchLocation = channel;
+          } else if (channel.startsWith('C') || channel.startsWith('D')) {
+            // Channel ID provided directly
+            targetChannel = channel;
+            searchLocation = `channel ${channel}`;
+          } else {
+            return {
+              content: [{
+                type: "text",
+                text: `❌ Invalid channel format: ${channel}\n\nUse:\n• #channelname for channels\n• U1234567 for user DMs (from search_users)\n• Channel IDs (C... or D...)`
+              }],
+              isError: true
+            };
           }
           
-          searchQuery = `in:${targetChannel} ${searchQuery}`;
+          searchQuery = `in:${targetChannel} ${query}`;
         }
         
         console.log(`🔍 Search query: "${searchQuery}"`);
@@ -331,7 +335,7 @@ export function registerSlackTools(server, tokenData, sessionId) {
           return {
             content: [{
               type: "text",
-              text: `🔍 No messages found for "${query}" in ${searchLocation}\n\n*Tip: For user-specific searches, use exact user IDs from the search_users tool*`
+              text: `🔍 No messages found for "${query}" in ${searchLocation}`
             }]
           };
         }
