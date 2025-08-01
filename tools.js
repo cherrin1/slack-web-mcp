@@ -256,10 +256,10 @@ export function registerSlackTools(server, tokenData, sessionId) {
     "slack_search_messages",
     {
       title: "Search Messages",
-      description: "Search for messages across workspace or in specific channel/DM. For user-specific searches, use the channel parameter with user ID.",
+      description: "Search for messages across workspace or in specific channel/DM",
       inputSchema: {
-        query: z.string().describe("Search keywords (do not include 'from:' - use channel parameter for user searches)"),
-        channel: z.string().optional().describe("Optional: limit search to specific channel (#general) or user ID (U1234567 from search_users)"),
+        query: z.string().describe("Search keywords or username"),
+        channel: z.string().optional().describe("Optional: limit search to specific channel (#general) or user (@john.doe)"),
         limit: z.number().optional().describe("Number of results (max 20)").default(10)
       }
     },
@@ -269,56 +269,18 @@ export function registerSlackTools(server, tokenData, sessionId) {
         let searchQuery = query;
         let searchLocation = "workspace";
         
-        // Block from: syntax in the query
-        if (query.includes('from:')) {
-          return {
-            content: [{
-              type: "text",
-              text: `❌ Don't use 'from:' syntax in the query. Instead:\n\n1. Use **search_users** to find the user\n2. Put the user ID in the **channel** parameter\n3. Put your search keywords in the **query** parameter\n\nExample:\n• Query: "project updates"\n• Channel: "U1234567"\n\nThis will search for "project updates" in messages from that user.`
-            }],
-            isError: true
-          };
-        }
-        
-        // Handle channel parameter for filtering
+        // Add channel filter if specified
         if (channel) {
           let targetChannel = channel;
           
-          // Handle user ID - convert to DM channel for search
-          if (channel.match(/^U[A-Z0-9]+$/)) {
-            try {
-              // Get user info for display name
-              const userInfo = await slack.users.info({ user: channel });
-              const userName = userInfo.user.real_name || userInfo.user.name;
-              
-              // Open DM channel to get the channel ID for search
-              const dmResult = await slack.conversations.open({ users: channel });
-              targetChannel = dmResult.channel.id;
-              searchLocation = `DM with ${userName}`;
-            } catch (e) {
-              return {
-                content: [{
-                  type: "text",
-                  text: `❌ Invalid user ID: ${channel}. Please use search_users to find the correct user ID.`
-                }],
-                isError: true
-              };
-            }
+          if (channel.startsWith('@') || (!channel.startsWith('#') && !channel.startsWith('C') && !channel.startsWith('D'))) {
+            const user = await resolveUser(slack, channel);
+            const dmResult = await slack.conversations.open({ users: user.id });
+            targetChannel = dmResult.channel.id;
+            searchLocation = `DM with ${user.name}`;
           } else if (channel.startsWith('#')) {
             targetChannel = channel.substring(1);
             searchLocation = channel;
-          } else if (channel.startsWith('C') || channel.startsWith('D')) {
-            // Channel ID provided directly
-            targetChannel = channel;
-            searchLocation = `channel ${channel}`;
-          } else {
-            return {
-              content: [{
-                type: "text",
-                text: `❌ Invalid channel format: ${channel}\n\nUse:\n• #channelname for channels\n• U1234567 for user DMs (from search_users)\n• Channel IDs (C... or D...)`
-              }],
-              isError: true
-            };
           }
           
           searchQuery = `in:${targetChannel} ${query}`;
@@ -381,7 +343,127 @@ export function registerSlackTools(server, tokenData, sessionId) {
     }
   );
 
-  // Tool 4: Get channels
+  // Tool 4: Search user messages (messages FROM a specific user)
+  server.registerTool(
+    "slack_search_user_messages",
+    {
+      title: "Search User Messages",
+      description: "Search for messages sent BY a specific user. Use search_users first to get the user ID.",
+      inputSchema: {
+        user_id: z.string().describe("User ID from search_users tool (e.g., U1234567)"),
+        query: z.string().optional().describe("Optional: search within that user's messages").default(""),
+        channel: z.string().optional().describe("Optional: limit to specific channel (#general) or leave empty for all channels"),
+        limit: z.number().optional().describe("Number of results (max 20)").default(10)
+      }
+    },
+    async ({ user_id, query = "", channel, limit = 10 }) => {
+      try {
+        const slack = new WebClient(tokenData.access_token);
+        
+        // Validate user ID format
+        if (!user_id.match(/^U[A-Z0-9]+$/)) {
+          return {
+            content: [{
+              type: "text",
+              text: `❌ Invalid user ID format: ${user_id}\n\nPlease use search_users first to get the correct user ID (format: U1234567)`
+            }],
+            isError: true
+          };
+        }
+        
+        // Get user info for display
+        let userName = user_id;
+        try {
+          const userInfo = await slack.users.info({ user: user_id });
+          userName = userInfo.user.real_name || userInfo.user.name;
+        } catch (e) {
+          return {
+            content: [{
+              type: "text",
+              text: `❌ User not found: ${user_id}\n\nPlease use search_users to find the correct user ID.`
+            }],
+            isError: true
+          };
+        }
+        
+        // Build search query
+        let searchQuery = `from:${user_id}`;
+        if (query.trim()) {
+          searchQuery += ` ${query}`;
+        }
+        
+        let searchLocation = "all channels";
+        
+        // Add channel filter if specified
+        if (channel) {
+          let targetChannel = channel;
+          
+          if (channel.startsWith('#')) {
+            targetChannel = channel.substring(1);
+            searchLocation = channel;
+          } else if (channel.startsWith('C')) {
+            targetChannel = channel;
+            searchLocation = `channel ${channel}`;
+          } else {
+            return {
+              content: [{
+                type: "text",
+                text: `❌ Invalid channel format: ${channel}\n\nUse #channelname or channel ID (C...)`
+              }],
+              isError: true
+            };
+          }
+          
+          searchQuery += ` in:${targetChannel}`;
+        }
+        
+        console.log(`🔍 User message search query: "${searchQuery}"`);
+        
+        const results = await slack.search.messages({
+          query: searchQuery,
+          count: Math.min(limit, 20)
+        });
+        
+        if (!results.messages || results.messages.total === 0) {
+          const queryInfo = query ? ` containing "${query}"` : '';
+          return {
+            content: [{
+              type: "text",
+              text: `🔍 No messages found from ${userName}${queryInfo} in ${searchLocation}`
+            }]
+          };
+        }
+        
+        const messageList = results.messages.matches
+          .slice(0, limit)
+          .map(msg => {
+            const timestamp = new Date(parseInt(msg.ts) * 1000).toLocaleString();
+            const channelName = msg.channel ? `#${msg.channel.name}` : 'DM';
+            return `[${timestamp}] ${userName} in ${channelName}: ${msg.text}`;
+          });
+        
+        const queryInfo = query ? ` containing "${query}"` : '';
+        
+        return {
+          content: [{
+            type: "text",
+            text: `💬 Messages from ${userName}${queryInfo} in ${searchLocation}:\n\n${messageList.join('\n\n')}\n\n*Found ${results.messages.total} total • Showing ${messageList.length} results*`
+          }]
+        };
+      } catch (error) {
+        console.error(`❌ Search user messages failed:`, error.message);
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Failed to search user messages: ${error.message}`
+          }],
+          isError: true
+        };
+      }
+    }
+  );
+
+  // Tool 5: Get channels
   server.registerTool(
     "slack_get_channels",
     {
