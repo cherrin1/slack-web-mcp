@@ -1,3 +1,135 @@
+import { WebClient } from "@slack/web-api";
+import { z } from "zod";
+
+// Helper function to resolve user ID from username or display name
+async function resolveUserId(slack, userInput) {
+  // If it's already a user ID (starts with U), return as-is
+  if (userInput.match(/^U[A-Z0-9]+$/)) {
+    return userInput;
+  }
+  
+  // Remove @ if present
+  const cleanInput = userInput.replace('@', '').toLowerCase();
+  
+  try {
+    // First try direct username lookup
+    const userByName = await slack.users.info({ user: cleanInput });
+    if (userByName.user) {
+      return userByName.user.id;
+    }
+  } catch (e) {
+    // Username lookup failed, try searching all users
+  }
+  
+  // Search through users list for matching username or real name
+  let cursor = null;
+  const limit = 200; // Slack API limit per request
+  
+  do {
+    const params = { limit };
+    if (cursor) params.cursor = cursor;
+    
+    const users = await slack.users.list(params);
+    
+    for (const user of users.members) {
+      if (user.deleted || user.is_bot) continue;
+      
+      // Check username match
+      if (user.name && user.name.toLowerCase() === cleanInput) {
+        return user.id;
+      }
+      
+      // Check real name match (case insensitive, partial match)
+      if (user.real_name && user.real_name.toLowerCase().includes(cleanInput)) {
+        return user.id;
+      }
+      
+      // Check display name match
+      if (user.profile?.display_name && 
+          user.profile.display_name.toLowerCase().includes(cleanInput)) {
+        return user.id;
+      }
+    }
+    
+    cursor = users.response_metadata?.next_cursor;
+  } while (cursor);
+  
+  throw new Error(`User not found: ${userInput}`);
+}
+
+// Helper function to get user display name
+async function getUserDisplayName(slack, userId) {
+  try {
+    const userInfo = await slack.users.info({ user: userId });
+    return userInfo.user.real_name || userInfo.user.name || userId;
+  } catch (e) {
+    return userId;
+  }
+}
+
+// Main function to register all Slack tools
+export function registerSlackTools(server, tokenData, sessionId) {
+  
+  // Tool 1: Send message to channel (improved)
+  server.registerTool(
+    "slack_send_message",
+    {
+      title: "Send Slack Message",
+      description: "Send a message to a Slack channel or user",
+      inputSchema: {
+        channel: z.string().describe("Channel ID or name (e.g., #general, @username, or channel ID)"),
+        text: z.string().describe("Message text to send")
+      }
+    },
+    async ({ channel, text }) => {
+      try {
+        const slack = new WebClient(tokenData.access_token);
+        
+        let targetChannel = channel;
+        
+        // Handle user mentions - resolve to DM channel
+        if (channel.startsWith('@') || (!channel.startsWith('#') && !channel.startsWith('C'))) {
+          try {
+            const userId = await resolveUserId(slack, channel);
+            const dmResult = await slack.conversations.open({ users: userId });
+            targetChannel = dmResult.channel.id;
+          } catch (e) {
+            return {
+              content: [{
+                type: "text",
+                text: `❌ Could not find user or create DM with: ${channel}. Error: ${e.message}`
+              }],
+              isError: true
+            };
+          }
+        }
+        
+        const result = await slack.chat.postMessage({
+          channel: targetChannel,
+          text: text
+        });
+        
+        console.log(`📤 Message sent by ${tokenData.user_name} to ${channel}`);
+        
+        return {
+          content: [{
+            type: "text",
+            text: `✅ Message sent successfully to ${channel}!\n\nTimestamp: ${result.ts}\nChannel: ${result.channel}\nSent as: ${tokenData.user_name} (${tokenData.team_name})`
+          }]
+        };
+      } catch (error) {
+        console.error(`❌ Send message failed for ${tokenData.user_name}:`, error.message);
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Failed to send message: ${error.message}`
+          }],
+          isError: true
+        };
+      }
+    }
+  );
+
 // Tool 2: Send direct message (improved with automatic user search)
   server.registerTool(
     "slack_send_dm",
