@@ -1,4 +1,78 @@
-// tools.js - Improved Slack MCP Tools - Optimized for Large Workspaces (180+ users)
+// Tool 2: Send direct message (improved with automatic user search)
+  server.registerTool(
+    "slack_send_dm",
+    {
+      title: "Send Direct Message",
+      description: "Send a direct message to a specific user. Automatically searches user info first to find the correct user.",
+      inputSchema: {
+        user: z.string().describe("User ID, @username, display name, or partial name to send DM to"),
+        text: z.string().describe("Message text to send")
+      }
+    },
+    async ({ user, text }) => {
+      try {
+        const slack = new WebClient(tokenData.access_token);
+        
+        // First, search for the user to ensure we have the right person
+        console.log(`🔍 Searching for user: ${user}`);
+        const searchResults = await searchUsersFunction(slack, user.replace('@', ''), 5);
+        
+        if (searchResults.length === 0) {
+          return {
+            content: [{
+              type: "text",
+              text: `❌ No user found matching "${user}". Please try:\n- Using the exact username (e.g., @john.smith)\n- Using the full display name (e.g., "John Smith")\n- Using the search users tool first to find the correct person`
+            }],
+            isError: true
+          };
+        }
+        
+        // If multiple matches, show them for disambiguation
+        if (searchResults.length > 1) {
+          const userList = searchResults.map(({ user: u }) => {
+            const realName = u.real_name || u.name;
+            const displayName = u.profile?.display_name ? ` (${u.profile.display_name})` : '';
+            const email = u.profile?.email ? ` • ${u.profile.email}` : '';
+            const status = u.presence === 'active' ? '🟢' : '⚪';
+            
+            return `• ${status} ${realName}${displayName} (@${u.name}) - ${u.id}${email}`;
+          }).join('\n');
+          
+          return {
+            content: [{
+              type: "text",
+              text: `🔍 Found ${searchResults.length} users matching "${user}":\n\n${userList}\n\nPlease be more specific or use the exact username/ID for the person you want to message.`
+            }]
+          };
+        }
+        
+        // Single match found - proceed with DM
+        const targetUser = searchResults[0].user;
+        const userId = targetUser.id;
+        const userName = targetUser.real_name || targetUser.name;
+        
+        console.log(`✅ Found user: ${userName} (${userId})`);
+        
+        // Open DM channel with resolved user ID
+        const dmResult = await slack.conversations.open({
+          users: userId
+        });
+        
+        const result = await slack.chat.postMessage({
+          channel: dmResult.channel.id,
+          text: text
+        });
+        
+        console.log(`💬 DM sent by ${tokenData.user_name} to ${userName} (${userId})`);
+        
+        return {
+          content: [{
+            type: "text",
+            text: `✅ Direct message sent to ${userName}!\n\nRecipient: ${userName} (@${targetUser.name})\nUser ID: ${userId}\nTimestamp: ${result.ts}\nSent as: ${tokenData.user_name}`
+          }]
+        };
+      } catch (error) {
+        console.error(`// tools.js - Improved Slack MCP Tools - Optimized for Large Workspaces (180+ users)
 import { WebClient } from "@slack/web-api";
 import { z } from "zod";
 
@@ -66,6 +140,59 @@ async function getUserDisplayName(slack, userId) {
   } catch (e) {
     return userId;
   }
+}
+
+// Centralized user search function - used by multiple tools
+async function searchUsersFunction(slack, searchTerm, limit = 10) {
+  let allUsers = [];
+  let cursor = null;
+  
+  // Get all users with pagination
+  do {
+    const params = { limit: 200 };
+    if (cursor) params.cursor = cursor;
+    
+    const users = await slack.users.list(params);
+    allUsers = allUsers.concat(users.members || []);
+    cursor = users.response_metadata?.next_cursor;
+  } while (cursor);
+  
+  const searchLower = searchTerm.toLowerCase();
+  
+  // Filter and score matches
+  const matches = allUsers
+    .filter(user => !user.deleted && !user.is_bot)
+    .map(user => {
+      let score = 0;
+      const realName = (user.real_name || '').toLowerCase();
+      const username = (user.name || '').toLowerCase();
+      const displayName = (user.profile?.display_name || '').toLowerCase();
+      const email = (user.profile?.email || '').toLowerCase();
+      
+      // Exact matches get highest score
+      if (username === searchLower) score += 100;
+      if (realName === searchLower) score += 90;
+      if (displayName === searchLower) score += 85;
+      if (email === searchLower) score += 80;
+      
+      // Starts with matches
+      if (username.startsWith(searchLower)) score += 50;
+      if (realName.startsWith(searchLower)) score += 40;
+      if (displayName.startsWith(searchLower)) score += 35;
+      
+      // Contains matches
+      if (username.includes(searchLower)) score += 20;
+      if (realName.includes(searchLower)) score += 15;
+      if (displayName.includes(searchLower)) score += 10;
+      if (email.includes(searchLower)) score += 5;
+      
+      return { user, score };
+    })
+    .filter(item => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
+  
+  return matches;
 }
 
 // Main function to register all Slack tools
@@ -174,6 +301,216 @@ export function registerSlackTools(server, tokenData, sessionId) {
           content: [{
             type: "text",
             text: `❌ Failed to send DM: ${error.message}\n\nTip: Try using the exact username, display name, or user ID. Use the search users tool first if needed.`
+          }],
+          isError: true
+        };
+      }
+    }
+  );
+
+  // Tool: Get Direct Messages
+  server.registerTool(
+    "slack_get_dms",
+    {
+      title: "Get Direct Messages",
+      description: "Get direct messages with a specific user. Automatically searches for the user first.",
+      inputSchema: {
+        user: z.string().describe("User ID, @username, display name, or partial name to get DMs with"),
+        limit: z.number().optional().describe("Number of messages to retrieve (max 100)").default(10)
+      }
+    },
+    async ({ user, limit = 10 }) => {
+      try {
+        const slack = new WebClient(tokenData.access_token);
+        
+        // First, search for the user to ensure we have the right person
+        console.log(`🔍 Searching for user to get DMs: ${user}`);
+        const searchResults = await searchUsersFunction(slack, user.replace('@', ''), 5);
+        
+        if (searchResults.length === 0) {
+          return {
+            content: [{
+              type: "text",
+              text: `❌ No user found matching "${user}". Please try:\n- Using the exact username (e.g., @john.smith)\n- Using the full display name (e.g., "John Smith")\n- Using the search users tool first to find the correct person`
+            }],
+            isError: true
+          };
+        }
+        
+        // If multiple matches, show them for disambiguation
+        if (searchResults.length > 1) {
+          const userList = searchResults.map(({ user: u }) => {
+            const realName = u.real_name || u.name;
+            const displayName = u.profile?.display_name ? ` (${u.profile.display_name})` : '';
+            const email = u.profile?.email ? ` • ${u.profile.email}` : '';
+            const status = u.presence === 'active' ? '🟢' : '⚪';
+            
+            return `• ${status} ${realName}${displayName} (@${u.name}) - ${u.id}${email}`;
+          }).join('\n');
+          
+          return {
+            content: [{
+              type: "text",
+              text: `🔍 Found ${searchResults.length} users matching "${user}":\n\n${userList}\n\nPlease be more specific or use the exact username/ID for the person whose DMs you want to see.`
+            }]
+          };
+        }
+        
+        // Single match found - get DMs
+        const targetUser = searchResults[0].user;
+        const userId = targetUser.id;
+        const userName = targetUser.real_name || targetUser.name;
+        
+        console.log(`✅ Found user: ${userName} (${userId}), getting DMs...`);
+        
+        // Open DM channel with the user
+        const dmResult = await slack.conversations.open({
+          users: userId
+        });
+        
+        // Get messages from the DM channel
+        const messages = await slack.conversations.history({
+          channel: dmResult.channel.id,
+          limit: Math.min(limit, 100)
+        });
+        
+        if (!messages.messages || messages.messages.length === 0) {
+          return {
+            content: [{
+              type: "text",
+              text: `💬 No direct messages found with ${userName}\n\n*Retrieved by: ${tokenData.user_name}*`
+            }]
+          };
+        }
+        
+        const messageList = messages.messages
+          .slice(0, limit)
+          .map((msg) => {
+            const timestamp = new Date(parseInt(msg.ts) * 1000).toLocaleString();
+            const isFromMe = msg.user === tokenData.user_id;
+            const sender = isFromMe ? 'You' : userName;
+            return `[${timestamp}] ${sender}: ${msg.text || '(no text)'}`;
+          });
+        
+        return {
+          content: [{
+            type: "text",
+            text: `💬 Direct messages with ${userName} (@${targetUser.name}):\n\n${messageList.join('\n')}\n\n*Retrieved by: ${tokenData.user_name} • Total messages: ${messageList.length}*`
+          }]
+        };
+      } catch (error) {
+        console.error(`❌ Get DMs failed for ${tokenData.user_name}:`, error.message);
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Failed to get direct messages: ${error.message}`
+          }],
+          isError: true
+        };
+      }
+    }
+  );
+
+  // Tool: Search Direct Messages
+  server.registerTool(
+    "slack_search_dms",
+    {
+      title: "Search Direct Messages",
+      description: "Search for messages in direct message conversations. Automatically searches for the user first.",
+      inputSchema: {
+        user: z.string().describe("User ID, @username, display name, or partial name to search DMs with"),
+        query: z.string().describe("Search query (keywords to search for in the DM conversation)"),
+        limit: z.number().optional().describe("Number of results to return").default(10)
+      }
+    },
+    async ({ user, query, limit = 10 }) => {
+      try {
+        const slack = new WebClient(tokenData.access_token);
+        
+        // First, search for the user to ensure we have the right person
+        console.log(`🔍 Searching for user to search DMs: ${user}`);
+        const searchResults = await searchUsersFunction(slack, user.replace('@', ''), 5);
+        
+        if (searchResults.length === 0) {
+          return {
+            content: [{
+              type: "text",
+              text: `❌ No user found matching "${user}". Please try:\n- Using the exact username (e.g., @john.smith)\n- Using the full display name (e.g., "John Smith")\n- Using the search users tool first to find the correct person`
+            }],
+            isError: true
+          };
+        }
+        
+        // If multiple matches, show them for disambiguation
+        if (searchResults.length > 1) {
+          const userList = searchResults.map(({ user: u }) => {
+            const realName = u.real_name || u.name;
+            const displayName = u.profile?.display_name ? ` (${u.profile.display_name})` : '';
+            const email = u.profile?.email ? ` • ${u.profile.email}` : '';
+            const status = u.presence === 'active' ? '🟢' : '⚪';
+            
+            return `• ${status} ${realName}${displayName} (@${u.name}) - ${u.id}${email}`;
+          }).join('\n');
+          
+          return {
+            content: [{
+              type: "text",
+              text: `🔍 Found ${searchResults.length} users matching "${user}":\n\n${userList}\n\nPlease be more specific or use the exact username/ID for the person whose DMs you want to search.`
+            }]
+          };
+        }
+        
+        // Single match found - search DMs
+        const targetUser = searchResults[0].user;
+        const userId = targetUser.id;
+        const userName = targetUser.real_name || targetUser.name;
+        
+        console.log(`✅ Found user: ${userName} (${userId}), searching DMs...`);
+        
+        // Open DM channel with the user
+        const dmResult = await slack.conversations.open({
+          users: userId
+        });
+        
+        // Search messages in the specific DM channel
+        const searchQuery = `in:${dmResult.channel.id} ${query}`;
+        console.log(`🔍 Searching with query: ${searchQuery}`);
+        
+        const results = await slack.search.messages({
+          query: searchQuery,
+          count: Math.min(limit, 20)
+        });
+        
+        if (!results.messages || results.messages.total === 0) {
+          return {
+            content: [{
+              type: "text",
+              text: `🔍 No messages found for "${query}" in DMs with ${userName}\n\n*Searched by: ${tokenData.user_name}*`
+            }]
+          };
+        }
+        
+        const messageList = results.messages.matches
+          .slice(0, limit)
+          .map(msg => {
+            const timestamp = new Date(parseInt(msg.ts) * 1000).toLocaleString();
+            const isFromMe = msg.user === tokenData.user_id;
+            const sender = isFromMe ? 'You' : userName;
+            return `[${timestamp}] ${sender}: ${msg.text}`;
+          });
+        
+        return {
+          content: [{
+            type: "text",
+            text: `🔍 Search results for "${query}" in DMs with ${userName} (@${targetUser.name}):\n\n${messageList.join('\n\n')}\n\n*Found ${results.messages.total} total messages • Showing ${messageList.length} • Searched by: ${tokenData.user_name}*`
+          }]
+        };
+      } catch (error) {
+        console.error(`❌ Search DMs failed for ${tokenData.user_name}:`, error.message);
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Failed to search direct messages: ${error.message}`
           }],
           isError: true
         };
@@ -454,14 +791,14 @@ export function registerSlackTools(server, tokenData, sessionId) {
     }
   );
 
-  // Tool 7: Search messages (improved with user resolution)
+  // Tool 7: Search messages (improved with user resolution including display names)
   server.registerTool(
     "slack_search_messages",
     {
       title: "Search Slack Messages",
-      description: "Search for messages across your workspace. Always resolves user info for better results.",
+      description: "Search for messages across your workspace. Automatically resolves user info including display names for better results.",
       inputSchema: {
-        query: z.string().describe("Search query (e.g., 'from:@user', 'in:#channel', or just keywords)"),
+        query: z.string().describe("Search query (e.g., 'from:@user', 'from:John Smith', 'in:#channel', or just keywords)"),
         limit: z.number().optional().describe("Number of results to return").default(10),
         resolve_users: z.boolean().optional().describe("Resolve user IDs to display names").default(true)
       }
@@ -470,22 +807,44 @@ export function registerSlackTools(server, tokenData, sessionId) {
       try {
         const slack = new WebClient(tokenData.access_token);
         
-        // Process query to resolve user references
+        // Process query to resolve user references (including display names)
         let processedQuery = query;
         
-        // Look for user references in the query (from:@username, to:@username, etc.)
-        const userRefPattern = /(from:|to:|mention:)@(\w+)/gi;
-        const userRefs = [...query.matchAll(userRefPattern)];
+        // Look for user references in the query - expanded patterns
+        const userRefPatterns = [
+          /(from:|to:|mention:)@(\w+)/gi,           // from:@username
+          /(from:|to:|mention:)"([^"]+)"/gi,        // from:"Display Name"
+          /(from:|to:|mention:)'([^']+)'/gi,        // from:'Display Name'
+          /(from:|to:|mention:)([A-Z][a-z]+ [A-Z][a-z]+)/gi  // from:John Smith
+        ];
         
-        for (const match of userRefs) {
-          const [fullMatch, prefix, username] = match;
-          try {
-            const userId = await resolveUserId(slack, username);
-            processedQuery = processedQuery.replace(fullMatch, `${prefix}${userId}`);
-          } catch (e) {
-            console.warn(`Could not resolve user ${username} in search query`);
+        for (const pattern of userRefPatterns) {
+          const userRefs = [...query.matchAll(pattern)];
+          
+          for (const match of userRefs) {
+            const [fullMatch, prefix, userIdentifier] = match;
+            try {
+              console.log(`🔍 Resolving user reference: ${userIdentifier}`);
+              
+              // Search for user using our centralized search function
+              const searchResults = await searchUsersFunction(slack, userIdentifier, 1);
+              
+              if (searchResults.length > 0) {
+                const userId = searchResults[0].user.id;
+                const userName = searchResults[0].user.real_name || searchResults[0].user.name;
+                console.log(`✅ Resolved "${userIdentifier}" to ${userName} (${userId})`);
+                processedQuery = processedQuery.replace(fullMatch, `${prefix}${userId}`);
+              } else {
+                console.warn(`⚠️ Could not resolve user "${userIdentifier}" in search query`);
+              }
+            } catch (e) {
+              console.warn(`❌ Error resolving user ${userIdentifier}:`, e.message);
+            }
           }
         }
+        
+        console.log(`🔍 Original query: ${query}`);
+        console.log(`🔍 Processed query: ${processedQuery}`);
         
         const results = await slack.search.messages({
           query: processedQuery,
@@ -496,7 +855,7 @@ export function registerSlackTools(server, tokenData, sessionId) {
           return {
             content: [{
               type: "text",
-              text: `🔍 No messages found for query: "${query}"\n\n*Searched by: ${tokenData.user_name}*`
+              text: `🔍 No messages found for query: "${query}"\n\nTip: Try using exact usernames (@john.smith) or display names ("John Smith") for better results.\n\n*Searched by: ${tokenData.user_name}*`
             }]
           };
         }
@@ -520,7 +879,7 @@ export function registerSlackTools(server, tokenData, sessionId) {
         return {
           content: [{
             type: "text",
-            text: `🔍 Search results for "${query}":\n\n${messageList.join('\n\n')}\n\n*Found ${results.messages.total} total messages • Showing ${messageList.length} • Searched by: ${tokenData.user_name}*`
+            text: `🔍 Search results for "${query}":\n\n${messageList.join('\n\n')}\n\n*Found ${results.messages.total} total messages • Showing ${messageList.length} • Searched by: ${tokenData.user_name}*\n\nNote: User references were automatically resolved for better search results.`
           }]
         };
       } catch (error) {
@@ -658,14 +1017,14 @@ export function registerSlackTools(server, tokenData, sessionId) {
     }
   );
 
-  // Tool: Add user search helper
+  // Tool: Add user search helper (now uses centralized search function)
   server.registerTool(
     "slack_search_users",
     {
       title: "Search Users",
-      description: "Search for users by name, username, or email. Helpful before sending DMs or getting user info.",
+      description: "Search for users by name, username, display name, or email. Helpful before sending DMs or getting user info.",
       inputSchema: {
-        search: z.string().describe("Search term (name, username, or email)"),
+        search: z.string().describe("Search term (name, username, display name, or email)"),
         limit: z.number().optional().describe("Maximum number of results").default(10)
       }
     },
@@ -673,59 +1032,14 @@ export function registerSlackTools(server, tokenData, sessionId) {
       try {
         const slack = new WebClient(tokenData.access_token);
         
-        let allUsers = [];
-        let cursor = null;
-        
-        // Get all users with pagination
-        do {
-          const params = { limit: 200 };
-          if (cursor) params.cursor = cursor;
-          
-          const users = await slack.users.list(params);
-          allUsers = allUsers.concat(users.members || []);
-          cursor = users.response_metadata?.next_cursor;
-        } while (cursor);
-        
-        const searchLower = search.toLowerCase();
-        
-        // Filter and score matches
-        const matches = allUsers
-          .filter(user => !user.deleted && !user.is_bot)
-          .map(user => {
-            let score = 0;
-            const realName = (user.real_name || '').toLowerCase();
-            const username = (user.name || '').toLowerCase();
-            const displayName = (user.profile?.display_name || '').toLowerCase();
-            const email = (user.profile?.email || '').toLowerCase();
-            
-            // Exact matches get highest score
-            if (username === searchLower) score += 100;
-            if (realName === searchLower) score += 90;
-            if (displayName === searchLower) score += 85;
-            if (email === searchLower) score += 80;
-            
-            // Starts with matches
-            if (username.startsWith(searchLower)) score += 50;
-            if (realName.startsWith(searchLower)) score += 40;
-            if (displayName.startsWith(searchLower)) score += 35;
-            
-            // Contains matches
-            if (username.includes(searchLower)) score += 20;
-            if (realName.includes(searchLower)) score += 15;
-            if (displayName.includes(searchLower)) score += 10;
-            if (email.includes(searchLower)) score += 5;
-            
-            return { user, score };
-          })
-          .filter(item => item.score > 0)
-          .sort((a, b) => b.score - a.score)
-          .slice(0, limit);
+        console.log(`🔍 Searching for users matching: ${search}`);
+        const matches = await searchUsersFunction(slack, search, limit);
         
         if (matches.length === 0) {
           return {
             content: [{
               type: "text",
-              text: `🔍 No users found matching "${search}"\n\n*Searched by: ${tokenData.user_name}*`
+              text: `🔍 No users found matching "${search}"\n\nTip: Try partial names, usernames, or email addresses.\n\n*Searched by: ${tokenData.user_name}*`
             }]
           };
         }
@@ -739,10 +1053,12 @@ export function registerSlackTools(server, tokenData, sessionId) {
           return `• ${status} ${realName}${displayName} (@${user.name}) - ${user.id}${email}`;
         }).join('\n');
         
+        console.log(`✅ Found ${matches.length} users matching "${search}"`);
+        
         return {
           content: [{
             type: "text",
-            text: `🔍 User search results for "${search}":\n\n${userList}\n\n*Found ${matches.length} matches • Searched by: ${tokenData.user_name}*\n*🟢 = Active, ⚪ = Away/Offline*`
+            text: `🔍 User search results for "${search}":\n\n${userList}\n\n*Found ${matches.length} matches • Searched by: ${tokenData.user_name}*\n*🟢 = Active, ⚪ = Away/Offline*\n\nYou can now use any of these names/usernames for DMs or other operations.`
           }]
         };
       } catch (error) {
